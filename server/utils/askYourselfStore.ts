@@ -12,7 +12,7 @@ export interface SavedAskYourself {
 
 // Latest question set per resolved repo path + PR number, answers included;
 // regenerating overwrites (and drops old answers with the old questions).
-const DIR = join(homedir(), '.differ')
+const DIR = join(homedir(), '.jdiff')
 const FILE = join(DIR, 'ask-yourself.json')
 
 export function loadAskYourself(repo: string, number: string): SavedAskYourself | null {

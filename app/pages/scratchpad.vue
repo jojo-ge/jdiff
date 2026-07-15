@@ -50,7 +50,7 @@ const thesis = computed(() => tabs.find((t) => t.id === tab.value)!.thesis)
 <template>
   <main class="scratchpad">
     <header class="bar">
-      <NuxtLink to="/" class="brand">differ</NuxtLink>
+      <NuxtLink to="/" class="brand">jDiff</NuxtLink>
       <span class="page-name">scratchpad</span>
       <span class="sub">pr page variations · mock data</span>
       <button class="toggle" :class="{ on: guidance }" @click="guidance = !guidance">

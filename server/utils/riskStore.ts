@@ -11,7 +11,7 @@ export interface SavedRiskMap {
 }
 
 // Latest risk map per resolved repo path + PR number; re-mapping overwrites.
-const DIR = join(homedir(), '.differ')
+const DIR = join(homedir(), '.jdiff')
 const FILE = join(DIR, 'risks.json')
 
 export function loadRiskMap(repo: string, number: string): SavedRiskMap | null {

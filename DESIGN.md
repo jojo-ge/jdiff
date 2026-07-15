@@ -1,5 +1,5 @@
 ---
-name: differ
+name: jDiff
 description: A local GitHub client that's really good at diffs — AI-guided code review in a quiet dark reading room.
 colors:
   graphite-base: "#0d1117"
@@ -82,15 +82,15 @@ components:
     padding: "12px 16px"
 ---
 
-# Design System: differ
+# Design System: jDiff
 
 ## 1. Overview
 
 **Creative North Star: "The Reading Room"**
 
-differ is a quiet, dark study built for one job: reading code with full attention. The diff is the room; every other element — navigation, guidance, notifications — is furniture, arranged so nothing competes with the code for attention. The palette is dimmed graphite: matte, understated layers of blue-black that recede behind syntax-highlighted code, with a single Cursor Blue accent that marks wherever the reviewer's attention should go next. Warmth lives in the words (the tours, the ask-yourself prompts, the patient guidance), never in the chrome.
+jDiff is a quiet, dark study built for one job: reading code with full attention. The diff is the room; every other element — navigation, guidance, notifications — is furniture, arranged so nothing competes with the code for attention. The palette is dimmed graphite: matte, understated layers of blue-black that recede behind syntax-highlighted code, with a single Cursor Blue accent that marks wherever the reviewer's attention should go next. Warmth lives in the words (the tours, the ask-yourself prompts, the patient guidance), never in the chrome.
 
-The system explicitly rejects AI-tool gimmickry (no sparkle icons, purple gradients, or chat bubbles), enterprise-dashboard density-without-purpose, SaaS polish, and consumer-cute softness. It also refuses to be a GitHub clone: the diff idiom stays familiar — side-by-side, green/red, mono gutters — but executed with more care, and everything around the diff speaks in differ's own gritty, lowercase, workmanlike voice.
+The system explicitly rejects AI-tool gimmickry (no sparkle icons, purple gradients, or chat bubbles), enterprise-dashboard density-without-purpose, SaaS polish, and consumer-cute softness. It also refuses to be a GitHub clone: the diff idiom stays familiar — side-by-side, green/red, mono gutters — but executed with more care, and everything around the diff speaks in jDiff's own gritty, lowercase, workmanlike voice.
 
 **Key Characteristics:**
 - Dark, flat, border-defined; surfaces are carved by 1px lines, not lifted by shadows.
@@ -129,10 +129,10 @@ Matte layers of blue-black graphite carve the space; one blue voice directs atte
 **Display/Label Font:** ui-monospace, 'SF Mono', Menlo, Consolas (the mono stack)
 **Body Font:** -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial (system sans)
 
-**Character:** The system sans is invisible infrastructure for prose; the monospace is differ's actual voice — anything that comes from git or names the tool itself speaks in mono. The pairing contrasts on axis (system UI vs. terminal), never competes.
+**Character:** The system sans is invisible infrastructure for prose; the monospace is jDiff's actual voice — anything that comes from git or names the tool itself speaks in mono. The pairing contrasts on axis (system UI vs. terminal), never competes.
 
 ### Hierarchy
-- **Display** (700, 28px, mono): The wordmark "differ" on the home page. Lowercase, always.
+- **Display** (700, 28px, mono): The wordmark "jDiff" on the home page. Always cased exactly "jDiff".
 - **Headline** (600, 20px, sans): PR titles. The largest sans on any screen.
 - **Body** (400, 13–14px, sans, 1.5): Prose — summaries, comments, guidance, answers. Cap reading columns near 700px (~70ch).
 - **Code** (400, 12px / 20px line-height, mono): Diff content, file paths, branches, stats, logs.
@@ -180,7 +180,7 @@ Workmanlike and sturdy: plain, honest controls that feel hand-made rather than d
 - **Textareas:** Vertically resizable, Base fill, same focus behavior.
 
 ### Navigation
-- **Pattern:** No global chrome. Each page opens with a baseline-aligned bar: mono bold "differ" wordmark, context (repo slug / PR number) in muted, actions pushed right with `margin-left: auto`.
+- **Pattern:** No global chrome. Each page opens with a baseline-aligned bar: mono bold "jDiff" wordmark, context (repo slug / PR number) in muted, actions pushed right with `margin-left: auto`.
 - **Sidebar (file nav):** Sticky bordered panel; mono 11px file rows, hover fill Graphite Raised, dot indicators for risk (green/amber/red).
 - **Segmented modes:** Bordered pill group on Graphite Raised; active segment gets Panel fill + 1px ring.
 
@@ -203,7 +203,7 @@ Side-by-side CSS grid (`minmax(52px, auto) 1fr` ×2), mono 12px on 20px lines. G
 ### Don't:
 - **Don't** ship AI-tool gimmickry: no sparkle icons, purple gradients, glassmorphism, or chat bubbles. The AI layer looks like review expertise (cards, tours, questions), not a costume.
 - **Don't** drift into enterprise-dashboard territory: no KPI tiles, card walls, or chrome that outweighs content.
-- **Don't** read as a GitHub clone: the diff idiom is shared vocabulary, but layouts, voice, and guidance surfaces are differ's own.
+- **Don't** read as a GitHub clone: the diff idiom is shared vocabulary, but layouts, voice, and guidance surfaces are jDiff's own.
 - **Don't** go SaaS-glossy or consumer-cute: no onboarding funnels, marketing sheen, bouncy motion, or illustration-heavy friendliness. Keep the gritty local-tool feel.
 - **Don't** use color decoratively: green/red/amber only with semantic meaning; a second decorative accent is prohibited.
 - **Don't** cast shadows on in-flow elements or use opaque color blocks where a wash belongs.

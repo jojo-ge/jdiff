@@ -46,19 +46,19 @@ export default defineEventHandler(async (event) => {
         [
           'fetch', '--quiet', 'origin',
           `+refs/heads/${base}:refs/remotes/origin/${base}`,
-          `+refs/pull/${number}/head:refs/differ/pr-${number}`,
+          `+refs/pull/${number}/head:refs/jdiff/pr-${number}`,
         ],
         repoPath,
       )
 
-      const range = `origin/${base}...refs/differ/pr-${number}`
+      const range = `origin/${base}...refs/jdiff/pr-${number}`
       let fileDiff = await run('git', ['diff', '--no-color', '-M', range, '--', filePath], repoPath)
       const diffTruncated = fileDiff.length > MAX_FILE_DIFF_CHARS
       if (diffTruncated) fileDiff = fileDiff.slice(0, MAX_FILE_DIFF_CHARS)
 
       // The line the reviewer clicked, shown with surrounding context from
       // whichever version of the file it belongs to.
-      const ref = side === 'LEFT' ? `origin/${base}` : `refs/differ/pr-${number}`
+      const ref = side === 'LEFT' ? `origin/${base}` : `refs/jdiff/pr-${number}`
       let snippet = ''
       try {
         const lines = (await run('git', ['show', `${ref}:${filePath}`], repoPath)).split('\n')

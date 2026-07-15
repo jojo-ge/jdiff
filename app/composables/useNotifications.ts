@@ -40,7 +40,7 @@ const EMOJI: Record<string, string> = {
 const POLL_MS = 60_000
 
 export function useNotifications(repo: Ref<string>) {
-  const storageKey = computed(() => `differ:notifs:${repo.value}`)
+  const storageKey = computed(() => `jdiff:notifs:${repo.value}`)
   const store = ref<NotifStore | null>(null)
 
   function load() {

@@ -315,8 +315,8 @@ export const scratchFiles: ScratchFile[] = [
 
   file('README.md', 'modified', 'docs', [
     mkHunk(23, 23, [
-      ['ctx', '- `server/api/diff.get.ts` — `git fetch origin +refs/pull/N/head:refs/differ/pr-N`'],
-      ['ctx', '  then `git diff origin/<base>...refs/differ/pr-N`, parsed with `parse-diff` and'],
+      ['ctx', '- `server/api/diff.get.ts` — `git fetch origin +refs/pull/N/head:refs/jdiff/pr-N`'],
+      ['ctx', '  then `git diff origin/<base>...refs/jdiff/pr-N`, parsed with `parse-diff` and'],
       ['ctx', '  highlighted server-side with `shiki`'],
       ['add', '- `server/api/limits.get.ts` — remaining AI request budget for the repo;'],
       ['add', '  requests are rate-limited per repo with an in-memory token bucket'],

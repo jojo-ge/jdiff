@@ -4,6 +4,8 @@ const CLAUDE_TIMEOUT_MS = 300_000
 
 export interface RunClaudeOpts {
   cwd?: string
+  // CLI model name; defaults to the fast general-purpose model.
+  model?: string
   // Aborting kills the claude process (SIGTERM). Endpoints tie this to the
   // SSE connection so closing the EventSource cancels the run.
   signal?: AbortSignal
@@ -24,7 +26,7 @@ export function runClaude(prompt: string, opts: RunClaudeOpts): Promise<string> 
     const child = spawn(
       'claude',
       [
-        '-p', '--model', 'claude-sonnet-5', '--output-format', 'stream-json', '--verbose',
+        '-p', '--model', opts.model ?? 'claude-sonnet-5', '--output-format', 'stream-json', '--verbose',
         ...(wantDeltas ? ['--include-partial-messages'] : []),
       ],
       { timeout: CLAUDE_TIMEOUT_MS, signal: opts.signal, env: process.env, cwd: opts.cwd },

@@ -1,4 +1,4 @@
-# differ
+# jDiff
 
 A local GitHub client that's really good at diffs. Nuxt 4 app; `gh` lists PRs, local `git` computes and highlights diffs. See README.md for architecture.
 

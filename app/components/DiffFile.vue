@@ -306,7 +306,7 @@ async function submit() {
 
 // "Ask" mode: fires a preset question at the local claude CLI over SSE.
 // One stream at a time; thinking + tool logs render live, then the saved
-// ask (persisted server-side in ~/.differ/asks.json) replaces the stream.
+// ask (persisted server-side in ~/.jdiff/asks.json) replaces the stream.
 function rowAsks(row: Row): SavedAsk[] {
   const out: SavedAsk[] = []
   if (row.left.num != null && row.left.type !== 'empty') {

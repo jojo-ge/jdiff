@@ -13,7 +13,7 @@ interface Hunk {
   header: string
   rows: Row[]
 }
-interface FilePayload {
+export interface FilePayload {
   path: string
   oldPath: string | null
   status: 'added' | 'deleted' | 'renamed' | 'modified'
@@ -30,22 +30,28 @@ export default defineEventHandler(async (event): Promise<{ files: FilePayload[] 
   const number = String(getQuery(event).number ?? '')
   if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad ?number=' })
 
-  const meta = JSON.parse(await run('gh', ['pr', 'view', number, '--json', 'baseRefName'], path))
+  const meta = JSON.parse(await run('gh', ['pr', 'view', number, '--json', 'baseRefName,headRefOid'], path))
   const base: string = meta.baseRefName
+  const headOid: string = meta.headRefOid
+
+  // The parsed + highlighted diff is cached on disk keyed by the head commit,
+  // so reopening an unchanged PR skips the fetch, diff, and highlighting.
+  const cached = loadDiff(path, number, headOid)
+  if (cached) return { files: cached.files }
 
   await run(
     'git',
     [
       'fetch', '--quiet', 'origin',
       `+refs/heads/${base}:refs/remotes/origin/${base}`,
-      `+refs/pull/${number}/head:refs/differ/pr-${number}`,
+      `+refs/pull/${number}/head:refs/jdiff/pr-${number}`,
     ],
     path,
   )
 
   const raw = await run(
     'git',
-    ['diff', '--no-color', '-M', `origin/${base}...refs/differ/pr-${number}`],
+    ['diff', '--no-color', '-M', `origin/${base}...refs/jdiff/pr-${number}`],
     path,
   )
 
@@ -122,5 +128,6 @@ export default defineEventHandler(async (event): Promise<{ files: FilePayload[] 
     })
   }
 
+  saveDiff(path, number, { headOid, createdAt: new Date().toISOString(), files })
   return { files }
 })

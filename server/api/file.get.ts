@@ -6,7 +6,7 @@ export default defineEventHandler(async (event) => {
   if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad ?number=' })
   if (!filePath) throw createError({ statusCode: 400, message: 'missing ?path=' })
 
-  const ref = `refs/differ/pr-${number}`
+  const ref = `refs/jdiff/pr-${number}`
   let content: string
   try {
     content = await run('git', ['show', `${ref}:${filePath}`], repoDir)

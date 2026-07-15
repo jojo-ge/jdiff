@@ -1,17 +1,20 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { ReviewRating } from '../api/review-rating.get'
+import type { ReviewRating } from './aiArtifacts'
 
 export interface SavedRating {
   repo: string
   number: string
   rating: ReviewRating
   createdAt: string
+  // sha256 of the full diff the rating was computed from — lets the
+  // consistency review pass detect "same code, new run" and pin the score.
+  diffHash?: string
 }
 
 // Latest rating per resolved repo path + PR number; re-rating overwrites.
-const DIR = join(homedir(), '.differ')
+const DIR = join(homedir(), '.jdiff')
 const FILE = join(DIR, 'ratings.json')
 
 export function loadRating(repo: string, number: string): SavedRating | null {

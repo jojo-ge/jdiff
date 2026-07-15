@@ -1,4 +1,4 @@
-# differ
+# jDiff
 
 A local GitHub client that's really good at diffs. GitHub is only used to know
 which PRs are open — everything else happens with your local tooling:
@@ -21,6 +21,6 @@ diff. Recent repos are remembered.
 ## How it works
 
 - `server/api/prs.get.ts` — `gh pr list` in the repo's directory
-- `server/api/diff.get.ts` — `git fetch origin +refs/pull/N/head:refs/differ/pr-N`
-  then `git diff origin/<base>...refs/differ/pr-N`, parsed with `parse-diff` and
+- `server/api/diff.get.ts` — `git fetch origin +refs/pull/N/head:refs/jdiff/pr-N`
+  then `git diff origin/<base>...refs/jdiff/pr-N`, parsed with `parse-diff` and
   highlighted server-side with `shiki`

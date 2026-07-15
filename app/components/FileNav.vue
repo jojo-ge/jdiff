@@ -43,7 +43,7 @@ const MODES = computed(() => (props.hasChecklist ? [TODO_MODE, ...FILE_MODES] : 
 
 const mode = ref<Mode>('folders')
 onMounted(() => {
-  const saved = localStorage.getItem('differ:filenav-mode') as Mode | null
+  const saved = localStorage.getItem('jdiff:filenav-mode') as Mode | null
   if (saved && (saved === 'todo' ? props.hasChecklist : FILE_MODES.some((m) => m.id === saved))) {
     mode.value = saved
   } else if (props.hasChecklist) {
@@ -56,13 +56,13 @@ onMounted(() => {
 watch(
   () => props.hasChecklist,
   (has) => {
-    const saved = localStorage.getItem('differ:filenav-mode')
+    const saved = localStorage.getItem('jdiff:filenav-mode')
     if (has && !saved) mode.value = 'todo'
     if (!has && mode.value === 'todo') mode.value = 'folders'
   },
 )
 watch(mode, (m) => {
-  localStorage.setItem('differ:filenav-mode', m)
+  localStorage.setItem('jdiff:filenav-mode', m)
   collapsed.value = new Set()
 })
 

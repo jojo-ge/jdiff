@@ -1,5 +1,5 @@
 {
-  "name": "differ",
+  "name": "jdiff",
   "type": "module",
   "private": true,
   "scripts": {

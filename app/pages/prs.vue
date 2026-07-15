@@ -8,6 +8,11 @@ const { data: prs, pending, error, refresh } = useFetch<any[]>('/api/prs', { que
 const hideDrafts = ref(false)
 const onlyMine = ref(false)
 
+// Kick off the combined claude run (rating, risk map, tour, ask yourself)
+// straight from the list; the job runs server-side, so the row just badges
+// as busy and the artifacts are waiting when the PR is opened.
+const { isRunning, startAll } = useAiTasksHub(repo)
+
 const filtered = computed(() => (prs.value ?? []).filter(pr =>
   (!hideDrafts.value || !pr.isDraft)
   && (!onlyMine.value || pr.author?.login === info.value?.viewer),
@@ -17,7 +22,7 @@ const filtered = computed(() => (prs.value ?? []).filter(pr =>
 <template>
   <main class="prs">
     <header class="bar">
-      <NuxtLink to="/" class="brand">differ</NuxtLink>
+      <NuxtLink to="/" class="brand">jDiff</NuxtLink>
       <span class="slug">{{ info?.slug ?? repo }}</span>
       <button class="refresh" :disabled="pending" @click="refresh()">↻</button>
       <NotificationBell :repo="repo" />
@@ -53,6 +58,17 @@ const filtered = computed(() => (prs.value ?? []).filter(pr =>
               class="badge score"
               :class="pr.ratingScore >= 7 ? 'good' : pr.ratingScore >= 4 ? 'mid' : 'bad'"
             >✦ {{ pr.ratingScore }}/10</span>
+            <span class="row-tools">
+              <span v-if="isRunning(pr.number)" class="badge running">
+                <span class="spinner tiny" /> analyzing
+              </span>
+              <button
+                v-else
+                class="analyze-btn"
+                title="run all review tools on this PR in the background"
+                @click.prevent.stop="startAll(pr.number)"
+              >✦ analyze</button>
+            </span>
           </div>
           <div class="meta">
             <span>{{ pr.author?.login }}</span>
@@ -162,6 +178,31 @@ const filtered = computed(() => (prs.value ?? []).filter(pr =>
 .badge.approved { color: var(--green); border-color: var(--green); }
 .badge.changes { color: var(--red); border-color: var(--red); }
 .badge.score { font-family: var(--mono); }
+.row-tools {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+.badge.running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.analyze-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.analyze-btn:hover { color: var(--text); border-color: var(--accent); }
+.spinner.tiny { width: 8px; height: 8px; border-width: 2px; }
 .badge.score.good { color: var(--green); border-color: var(--green); }
 .badge.score.mid { color: var(--accent); border-color: var(--accent); }
 .badge.score.bad { color: var(--red); border-color: var(--red); }

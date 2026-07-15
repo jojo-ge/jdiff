@@ -10,11 +10,11 @@ web
 
 ## Users
 
-Any developer, publicly. differ is an open-source tool meant to be installed and used by developers reviewing pull requests on their own machines. They live in git and `gh`, have local clones of the repos they review, and open differ when a PR needs real attention — deep-focus reading sessions, not casual browsing. Design decisions must be legible to someone who didn't build the tool and has used GitHub's review UI for years.
+Any developer, publicly. jDiff is an open-source tool meant to be installed and used by developers reviewing pull requests on their own machines. They live in git and `gh`, have local clones of the repos they review, and open jDiff when a PR needs real attention — deep-focus reading sessions, not casual browsing. Design decisions must be legible to someone who didn't build the tool and has used GitHub's review UI for years.
 
 ## Product Purpose
 
-differ is a local GitHub client that's really good at diffs. GitHub is consulted only for the list of open PRs; fetching, diffing, and syntax highlighting all happen against the local clone with the user's own git tooling. On top of the diff sits a guided review layer — AI-generated tours, risk heatmaps, ask-yourself prompts, ratings — that helps the reviewer actually understand the change. Success is faster, deeper review: getting through a PR quicker while comprehending more of it than a raw diff scroll would allow.
+jDiff is a local GitHub client that's really good at diffs. GitHub is consulted only for the list of open PRs; fetching, diffing, and syntax highlighting all happen against the local clone with the user's own git tooling. On top of the diff sits a guided review layer — AI-generated tours, risk heatmaps, ask-yourself prompts, ratings — that helps the reviewer actually understand the change. Success is faster, deeper review: getting through a PR quicker while comprehending more of it than a raw diff scroll would allow.
 
 ## Positioning
 

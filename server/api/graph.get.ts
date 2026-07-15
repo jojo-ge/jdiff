@@ -145,12 +145,12 @@ export default defineEventHandler(async (event): Promise<{
     [
       'fetch', '--quiet', 'origin',
       `+refs/heads/${base}:refs/remotes/origin/${base}`,
-      `+refs/pull/${number}/head:refs/differ/pr-${number}`,
+      `+refs/pull/${number}/head:refs/jdiff/pr-${number}`,
     ],
     path,
   )
 
-  const headRef = `refs/differ/pr-${number}`
+  const headRef = `refs/jdiff/pr-${number}`
   const baseRef = `origin/${base}`
 
   const nameStatus = await run(

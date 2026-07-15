@@ -5,7 +5,7 @@ import type { SavedAsk } from '../../app/utils/askQuestions'
 
 // Asks live in a single local JSON file, keyed by resolved repo path + PR
 // number. This is per-machine state, deliberately not pushed to GitHub.
-const DIR = join(homedir(), '.differ')
+const DIR = join(homedir(), '.jdiff')
 const FILE = join(DIR, 'asks.json')
 
 export function loadAsks(repo: string, number: string): SavedAsk[] {

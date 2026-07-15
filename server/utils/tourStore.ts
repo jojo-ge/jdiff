@@ -11,7 +11,7 @@ export interface SavedTour {
 }
 
 // Latest tour per resolved repo path + PR number; regenerating overwrites.
-const DIR = join(homedir(), '.differ')
+const DIR = join(homedir(), '.jdiff')
 const FILE = join(DIR, 'tours.json')
 
 export function loadTour(repo: string, number: string): SavedTour | null {
