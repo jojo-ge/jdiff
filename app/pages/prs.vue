@@ -3,19 +3,41 @@ const route = useRoute()
 const repo = computed(() => String(route.query.repo ?? ''))
 
 const { data: info } = useFetch<{ slug: string, viewer?: string }>('/api/repo', { query: { repo } })
-const { data: prs, pending, error, refresh } = useFetch<any[]>('/api/prs', { query: { repo } })
+
+// The server caches the gh list for a minute; ↻ busts it with a fresh
+// force stamp, while plain navigation gets the instant cached answer.
+const force = ref<string | undefined>(undefined)
+const { data: prs, pending, error } = useFetch<any[]>('/api/prs', { query: { repo, force } })
+function refresh() {
+  force.value = String(Date.now())
+}
 
 const hideDrafts = ref(false)
 const onlyMine = ref(false)
+const imReviewing = ref(false)
+const teamReviewing = ref(false)
 
 // Kick off the combined claude run (rating, risk map, tour, ask yourself)
 // straight from the list; the job runs server-side, so the row just badges
 // as busy and the artifacts are waiting when the PR is opened.
 const { isRunning, startAll } = useAiTasksHub(repo)
 
+// gh's reviewRequests mixes users (login) and teams (slug/name, no login).
+function reviewRequestedOfMe(pr: any): boolean {
+  return (pr.reviewRequests ?? []).some((r: any) => r.login && r.login === info.value?.viewer)
+}
+function reviewRequestedOfTeam(pr: any): boolean {
+  return (pr.reviewRequests ?? []).some((r: any) => !r.login && (r.slug || r.name))
+}
+
 const filtered = computed(() => (prs.value ?? []).filter(pr =>
   (!hideDrafts.value || !pr.isDraft)
-  && (!onlyMine.value || pr.author?.login === info.value?.viewer),
+  && (!onlyMine.value || pr.author?.login === info.value?.viewer)
+  // The two reviewer filters widen each other: either checked alone narrows
+  // to it, both checked keeps PRs matching either.
+  && (!(imReviewing.value || teamReviewing.value)
+    || (imReviewing.value && reviewRequestedOfMe(pr))
+    || (teamReviewing.value && reviewRequestedOfTeam(pr))),
 ))
 </script>
 
@@ -36,6 +58,14 @@ const filtered = computed(() => (prs.value ?? []).filter(pr =>
       <label class="filter">
         <input v-model="onlyMine" type="checkbox">
         only mine
+      </label>
+      <label class="filter">
+        <input v-model="imReviewing" type="checkbox">
+        i'm reviewing
+      </label>
+      <label class="filter">
+        <input v-model="teamReviewing" type="checkbox">
+        my team is reviewing
       </label>
     </div>
 

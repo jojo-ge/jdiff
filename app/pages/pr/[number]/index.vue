@@ -1,8 +1,5 @@
 <script setup lang="ts">
 import type { SavedAsk } from '~/utils/askQuestions'
-import type { SelfQuestion } from '~/utils/askYourself'
-import type { FileRisk } from '~/utils/risk'
-import type { Tour } from '~/utils/tour'
 
 export interface ReviewComment {
   id: number
@@ -50,16 +47,8 @@ const asksByFile = computed(() => {
 
 const showComments = ref(true)
 
-// Claude artifacts (rating, risk map, tour) and the file graph are snapshots
-// of the diff at generation time; a push after that makes them out of date.
-// The PR metadata refreshes on window focus so the badges can appear while
+// The PR metadata refreshes on window focus so staleness can surface while
 // the page stays open.
-const lastPushedMs = computed(() =>
-  pr.value?.lastPushedAt ? new Date(pr.value.lastPushedAt).getTime() : 0,
-)
-function isStale(at: string): boolean {
-  return !!at && lastPushedMs.value > new Date(at).getTime()
-}
 const onFocus = () => refreshPr()
 onMounted(() => window.addEventListener('focus', onFocus))
 onBeforeUnmount(() => window.removeEventListener('focus', onFocus))
@@ -126,257 +115,69 @@ const closedFiles = ref<string[]>([])
 const visibleFiles = computed(() =>
   (diff.value?.files ?? []).filter((f) => !closedFiles.value.includes(f.path)),
 )
+const diffPaths = computed(() => new Set((diff.value?.files ?? []).map((f) => f.path)))
 
 function closeFile(path: string) {
   if (!closedFiles.value.includes(path)) closedFiles.value.push(path)
 }
 
-// The four guidance artifacts are only ever generated together, by one
-// combined claude run in a server-side job detached from this page —
-// leaving the page keeps the job going and coming back re-attaches to its
-// stream. The per-tool state below just folds those results into this
-// page's view.
+// The guidance artifacts (rating, risk map, tour, ask yourself) fold in via
+// usePrArtifacts; their detail cards live on the tool summary page — this
+// page keeps only the verdict line, the tour walk, the checklist, and the
+// risk dots in the file nav.
 const {
   tasks: aiTasks,
   anyPending,
   startAll: runAllTools,
   cancelAll: cancelAllTools,
   resume: resumeAiTasks,
-} = useAiTasks(repo, number)
+  rating,
+  tour,
+  tourAt,
+  riskAt,
+  sortedRisks,
+  riskCounts,
+  riskByPath,
+  selfQs,
+  answeredCount,
+  anyStale,
+} = usePrArtifacts(repo, number, computed(() => pr.value?.lastPushedAt ?? null))
 onMounted(() => { resumeAiTasks() })
 
-// Reviewability rating: runs the local `claude` CLI on the server against
-// the PR diff + category breakdown. Slow (an LLM call), so on-demand only.
-interface ReviewRating {
-  score: number
-  effort: string
-  summary: string
-  factors: { label: string; impact: 'good' | 'neutral' | 'bad'; detail: string }[]
-  readingOrder: { path: string; note: string }[]
-}
-const rating = ref<ReviewRating | null>(null)
-const ratedAt = ref('')
-// Open when the rating was just requested; ratings restored from the local
-// store start collapsed to just the score line.
-const ratingOpen = ref(false)
-
-// Ratings persist in ~/.jdiff/ratings.json; show the last one on load.
-const { data: savedRating } = useFetch<{ rating: ReviewRating; createdAt: string } | null>('/api/rating', {
-  query: { repo, number },
-})
-watch(savedRating, (v) => {
-  if (v && !rating.value) {
-    rating.value = v.rating
-    ratedAt.value = v.createdAt
-  }
-}, { immediate: true })
-const ratingStale = computed(() => isStale(ratedAt.value))
-// Reading-order entries only link into the diff when the path matches a real
-// file — claude occasionally abbreviates paths.
-const diffPaths = computed(() => new Set((diff.value?.files ?? []).map((f) => f.path)))
-const ratingPending = computed(() => aiTasks.value.rating.pending)
-const ratingError = computed(() => aiTasks.value.rating.error)
-const ratingLog = computed(() => aiTasks.value.rating.log)
-const showLog = computed({
-  get: () => aiTasks.value.rating.showLog,
-  set: (v) => { aiTasks.value.rating.showLog = v },
-})
-const logEl = ref<HTMLElement | null>(null)
-
-watch(
-  () => ratingLog.value.length,
-  () => nextTick(() => logEl.value?.scrollTo({ top: logEl.value.scrollHeight })),
-)
-
-// A finished run (even one that completed while this page was closed)
-// lands here. No createdAt dedupe: the analyze run pushes the rating twice
-// with the same stamp (draft, then the consistency-reviewed version), and
-// the second push must still apply.
-watch(() => aiTasks.value.rating.result, (v) => {
-  if (v) {
-    rating.value = v.rating
-    ratedAt.value = v.createdAt
-    ratingOpen.value = true
-  }
-}, { immediate: true })
-
-// Risk heatmap: one claude pass over the whole diff rates each file
-// low/medium/high; the file nav colors a dot per file. Persisted in
-// ~/.jdiff/risks.json, so the last map shows on load.
-const risks = ref<FileRisk[] | null>(null)
-const riskAt = ref('')
-// Open when the map was just requested; maps restored from the local store
-// start collapsed to just the count line.
-const riskOpen = ref(false)
-const { data: savedRisks } = useFetch<{ risks: FileRisk[]; createdAt: string } | null>('/api/risk', {
-  query: { repo, number },
-})
-watch(savedRisks, (v) => {
-  if (v && !risks.value) {
-    risks.value = v.risks
-    riskAt.value = v.createdAt
-  }
-}, { immediate: true })
-const riskStale = computed(() => isStale(riskAt.value))
-const riskByPath = computed<Record<string, FileRisk>>(() =>
-  Object.fromEntries((risks.value ?? []).map((r) => [r.path, r])),
-)
-const RISK_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 }
-const sortedRisks = computed(() =>
-  [...(risks.value ?? [])].sort((a, b) => RISK_ORDER[a.level]! - RISK_ORDER[b.level]!),
-)
-const riskCounts = computed(() => {
-  const c = { high: 0, medium: 0, low: 0 }
-  for (const r of risks.value ?? []) c[r.level]++
-  return c
-})
-// The low bucket is usually long and skimmable; keep it folded unless it is
-// all there is.
-const showLowRisk = ref(false)
-const visibleRisks = computed(() => {
-  const all = sortedRisks.value
-  if (showLowRisk.value || riskCounts.value.high + riskCounts.value.medium === 0) return all
-  return all.filter((r) => r.level !== 'low')
-})
-const riskPending = computed(() => aiTasks.value.risk.pending)
-const riskError = computed(() => aiTasks.value.risk.error)
-const riskLog = computed(() => aiTasks.value.risk.log)
-const showRiskLog = computed({
-  get: () => aiTasks.value.risk.showLog,
-  set: (v) => { aiTasks.value.risk.showLog = v },
-})
-const riskLogEl = ref<HTMLElement | null>(null)
-
-watch(
-  () => riskLog.value.length,
-  () => nextTick(() => riskLogEl.value?.scrollTo({ top: riskLogEl.value.scrollHeight })),
-)
-
-watch(() => aiTasks.value.risk.result, (v) => {
-  if (v) {
-    risks.value = v.risks
-    riskAt.value = v.createdAt
-    riskOpen.value = true
-  }
-}, { immediate: true })
-
-// Guided tour: claude writes an overview of the change plus ordered stops
-// (file + line range + note). Walking the tour scrolls the diff to each
-// stop and highlights it in place, so commenting, asks, and context
-// expansion all keep working mid-tour. Persisted in ~/.jdiff/tours.json.
-const tour = ref<Tour | null>(null)
-const tourAt = ref('')
-const tourOpen = ref(false)
-const { data: savedTour } = useFetch<{ tour: Tour; createdAt: string } | null>('/api/tour', {
-  query: { repo, number },
-})
-watch(savedTour, (v) => {
-  if (v && !tour.value) {
-    tour.value = v.tour
-    tourAt.value = v.createdAt
-    if (import.meta.client) loadTourProgress()
-  }
-}, { immediate: true })
-const tourStale = computed(() => isStale(tourAt.value))
 const tourPending = computed(() => aiTasks.value.tour.pending)
-const tourError = computed(() => aiTasks.value.tour.error)
-const tourLog = computed(() => aiTasks.value.tour.log)
-const showTourLog = computed({
-  get: () => aiTasks.value.tour.showLog,
-  set: (v) => { aiTasks.value.tour.showLog = v },
-})
-const tourLogEl = ref<HTMLElement | null>(null)
 
+// Compact run status: while claude works (or after a failure) the page shows
+// the run's live log inline; the full per-tool panels live on the summary
+// page. The combined analyze run mirrors one log into every pending tool,
+// so the first pending tool's log is the run's log.
+const TOOL_KINDS = ['rating', 'risk', 'tour', 'self'] as const
+const runLog = computed(() => {
+  for (const k of TOOL_KINDS) {
+    if (aiTasks.value[k].pending && aiTasks.value[k].log.length) return aiTasks.value[k].log
+  }
+  return []
+})
+const runErrors = computed(() =>
+  [...new Set(TOOL_KINDS.map((k) => aiTasks.value[k].error).filter(Boolean))],
+)
+const runLogEl = ref<HTMLElement | null>(null)
 watch(
-  () => tourLog.value.length,
-  () => nextTick(() => tourLogEl.value?.scrollTo({ top: tourLogEl.value.scrollHeight })),
+  () => runLog.value.length,
+  () => nextTick(() => runLogEl.value?.scrollTo({ top: runLogEl.value.scrollHeight })),
 )
 
-// loadTourProgress (not clearTourProgress) so revisiting the page keeps
-// walk progress on this same tour; a genuinely new tour's createdAt won't
-// match the stored stamp, so it starts from stop 1 anyway.
-watch(() => aiTasks.value.tour.result, (v) => {
-  if (v) {
-    tour.value = v.tour
-    tourAt.value = v.createdAt
-    tourIndex.value = null
-    tourOpen.value = true
-    if (import.meta.client) loadTourProgress()
-  }
-}, { immediate: true })
-
-// Ask yourself: claude poses three big-picture questions — architecture,
-// new patterns, hard-to-reverse decisions — that the reviewer answers in
-// their own words. Answers save as drafts and can be posted back to the PR
-// as regular conversation comments. Persisted in ~/.jdiff/ask-yourself.json.
-const selfQs = ref<SelfQuestion[] | null>(null)
-const selfAt = ref('')
-const selfOpen = ref(false)
-const { data: savedSelf } = useFetch<{ questions: SelfQuestion[]; createdAt: string } | null>('/api/ask-yourself', {
-  query: { repo, number },
+const summaryRoute = computed(() => ({
+  path: `/pr/${number.value}/summary`,
+  query: { repo: repo.value },
+}))
+const summaryLine = computed(() => {
+  const parts: string[] = []
+  if (rating.value) parts.push(`rated ${rating.value.score}/10`)
+  if (sortedRisks.value.length) parts.push(`${riskCounts.value.high} high · ${riskCounts.value.medium} medium risks`)
+  if (tour.value) parts.push(`${tour.value.stops.length} stops`)
+  if (selfQs.value) parts.push(`${answeredCount.value}/${selfQs.value.length} answered`)
+  return parts.length ? parts.join(' · ') : 'reviewability · risk heatmap · guided tour · ask yourself'
 })
-watch(savedSelf, (v) => {
-  if (v && !selfQs.value) {
-    selfQs.value = v.questions
-    selfAt.value = v.createdAt
-  }
-}, { immediate: true })
-const selfStale = computed(() => isStale(selfAt.value))
-const answeredCount = computed(() => (selfQs.value ?? []).filter((q) => q.answer.trim()).length)
-const selfPending = computed(() => aiTasks.value.self.pending)
-// Writable: posting an answer back to the PR reports failures here too.
-const selfError = computed({
-  get: () => aiTasks.value.self.error,
-  set: (v) => { aiTasks.value.self.error = v },
-})
-const selfLog = computed(() => aiTasks.value.self.log)
-const showSelfLog = computed({
-  get: () => aiTasks.value.self.showLog,
-  set: (v) => { aiTasks.value.self.showLog = v },
-})
-const selfLogEl = ref<HTMLElement | null>(null)
-
-watch(
-  () => selfLog.value.length,
-  () => nextTick(() => selfLogEl.value?.scrollTo({ top: selfLogEl.value.scrollHeight })),
-)
-
-watch(() => aiTasks.value.self.result, (v) => {
-  if (v) {
-    selfQs.value = v.questions
-    selfAt.value = v.createdAt
-    selfOpen.value = true
-  }
-}, { immediate: true })
-
-function saveAnswer(i: number) {
-  const q = selfQs.value?.[i]
-  if (!q) return
-  $fetch('/api/ask-yourself-answer', {
-    method: 'POST',
-    body: { repo: repo.value, number: number.value, index: i, answer: q.answer },
-  }).catch(() => { /* draft save is best-effort; posting persists too */ })
-}
-
-const postingIdx = ref<number | null>(null)
-
-async function postAnswer(i: number) {
-  const q = selfQs.value?.[i]
-  if (!q || !q.answer.trim() || postingIdx.value != null) return
-  postingIdx.value = i
-  selfError.value = ''
-  try {
-    const res = await $fetch<{ url: string }>('/api/ask-yourself-post', {
-      method: 'POST',
-      body: { repo: repo.value, number: number.value, index: i, answer: q.answer },
-    })
-    q.postedUrl = res.url
-  } catch (e: any) {
-    selfError.value = e.data?.message ?? e.message ?? 'failed to post comment'
-  } finally {
-    postingIdx.value = null
-  }
-}
 
 // null = not touring; otherwise the index of the active stop.
 const tourIndex = ref<number | null>(null)
@@ -414,6 +215,15 @@ function clearTourProgress() {
   } catch { /* ignore */ }
 }
 
+// A changed stamp means a genuinely new tour: drop the active walk and any
+// remembered position, then restore whatever saved progress matches the
+// new stamp.
+watch(tourAt, () => {
+  tourIndex.value = null
+  resumeIndex.value = null
+  if (import.meta.client) loadTourProgress()
+}, { immediate: true })
+
 watch(tourIndex, (i) => {
   if (i == null) return
   resumeIndex.value = i
@@ -443,7 +253,7 @@ function jumpToStop(i: number) {
 function nextStop() {
   if (tourIndex.value == null || !tour.value) return
   if (tourIndex.value >= tour.value.stops.length - 1) {
-    endTour(true)
+    endTour()
     return
   }
   tourIndex.value++
@@ -477,16 +287,22 @@ function onTourKey(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', onTourKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onTourKey))
 
+// Arriving from the summary page's stop list (?stop=i): start the walk at
+// that stop once the tour and the diff are both here to scroll into.
+onMounted(() => {
+  const requested = Number(route.query.stop)
+  if (!Number.isInteger(requested)) return
+  const unwatch = watch([tour, diff], () => {
+    if (!tour.value || !diff.value) return
+    nextTick(() => unwatch())
+    if (requested >= 0 && requested < tour.value.stops.length) jumpToStop(requested)
+  }, { immediate: true })
+})
+
 // No unmount cleanup or leave-page warning for claude runs: the job runs
 // server-side detached from the page, its stream lives in useAiTasks
 // (runAllTools drives the combined /api/analyze-generate run), and leaving
 // simply stops watching.
-
-// A push after generation dates every artifact at once (they come from one
-// run), so staleness prompts a single re-run of all tools.
-const anyStale = computed(() =>
-  ratingStale.value || riskStale.value || tourStale.value || selfStale.value,
-)
 
 function onFileLinkClick(e: MouseEvent, path: string) {
   if (!closedFiles.value.includes(path)) return
@@ -499,7 +315,7 @@ function onFileLinkClick(e: MouseEvent, path: string) {
 // exist. Done-flags are browser state (localStorage keyed by repo + PR),
 // stamped with each artifact's createdAt so a regenerated tour or risk map
 // resets its own section without touching the other.
-const hasChecklist = computed(() => !!(tour.value || risks.value || selfQs.value))
+const hasChecklist = computed(() => !!(tour.value || sortedRisks.value.length || selfQs.value))
 const stopsDone = ref<boolean[]>([])
 const risksDone = ref<boolean[]>([])
 const checklistKey = computed(() => `jdiff:checklist:${repo.value}:${number.value}`)
@@ -522,7 +338,7 @@ watch([tour, tourAt], () => {
   stopsDone.value = Array(tour.value?.stops.length ?? 0).fill(false)
   restoreChecklist()
 }, { immediate: true })
-watch([risks, riskAt], () => {
+watch([sortedRisks, riskAt], () => {
   risksDone.value = Array(sortedRisks.value.length).fill(false)
   restoreChecklist()
 }, { immediate: true })
@@ -555,11 +371,10 @@ function nextUnreviewed() {
   jumpToStop(i === -1 ? 0 : i)
 }
 
+// Answering happens on the tool summary page now; the checklist entry
+// deep-links straight to that card.
 function openSelfCard() {
-  selfOpen.value = true
-  nextTick(() =>
-    document.getElementById('self-card')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
-  )
+  navigateTo({ ...summaryRoute.value, hash: '#self-card' })
 }
 </script>
 
@@ -568,15 +383,17 @@ function openSelfCard() {
     <header class="bar">
       <NuxtLink to="/" class="brand">jDiff</NuxtLink>
       <NuxtLink :to="{ path: '/prs', query: { repo } }" class="back">← PRs</NuxtLink>
-      <button
-        class="toggle"
-        :class="{ on: showComments }"
-        @click="showComments = !showComments"
-      >
-        💬 {{ commentCount }} · {{ showComments ? 'on' : 'off' }}
-      </button>
-      <NotificationBell :repo="repo" />
+      <span class="bar-end"><NotificationBell :repo="repo" /></span>
     </header>
+
+    <button
+      class="toggle"
+      :class="{ on: showComments }"
+      title="show or hide review comments in the diff"
+      @click="showComments = !showComments"
+    >
+      💬 {{ commentCount }} · {{ showComments ? 'on' : 'off' }}
+    </button>
 
     <div v-if="pr" class="pr-head">
       <h1>
@@ -627,6 +444,22 @@ function openSelfCard() {
         </button>
       </div>
 
+      <div v-if="anyPending || runErrors.length" class="rating-card">
+        <div class="rating-head">
+          <span class="card-title">✦ tool run</span>
+          <span class="rating-effort">{{ anyPending ? 'generating review guidance…' : 'the last run hit an error' }}</span>
+          <span class="head-actions">
+            <span v-if="anyPending" class="spinner small" />
+          </span>
+        </div>
+        <div v-if="runLog.length" ref="runLogEl" class="rating-log">
+          <div v-for="(l, i) in runLog" :key="i" class="log-line">
+            <span class="log-t">{{ l.t }}s</span>{{ l.text }}
+          </div>
+        </div>
+        <div v-for="e in runErrors" :key="e" class="error-box in-card">{{ e }}</div>
+      </div>
+
       <div v-if="anyStale && !anyPending" class="stale-banner">
         <span class="stale-badge">out of date</span>
         <span>the PR was pushed after this guidance was generated</span>
@@ -645,234 +478,17 @@ function openSelfCard() {
           <div v-else class="summary-md" v-html="summaryHtml" />
         </div>
       </div>
-      <div class="rating-card">
-        <div
-          class="rating-head"
-          :class="{ clickable: rating && !ratingPending }"
-          @click="rating && !ratingPending && (ratingOpen = !ratingOpen)"
-        >
-          <span v-if="rating && !ratingPending" class="rating-chevron">{{ ratingOpen ? '▾' : '▸' }}</span>
-          <template v-if="rating">
-            <span class="rating-score" :class="rating.score >= 7 ? 'good' : rating.score >= 4 ? 'mid' : 'bad'">
-              {{ rating.score }}/10
-            </span>
-            <span class="rating-effort">{{ rating.effort }} review</span>
-            <span v-if="ratedAt" class="rating-effort">rated {{ timeAgo(ratedAt) }}</span>
-            <span v-if="ratingStale" class="stale-badge" title="the PR was pushed after this rating was generated — re-run all tools to refresh">out of date</span>
-          </template>
-          <span v-else class="card-title">✦ reviewability</span>
-          <span class="head-actions">
-            <button
-              v-if="ratingOpen && ratingLog.length && !ratingPending"
-              class="log-toggle"
-              @click.stop="showLog = !showLog"
-            >
-              {{ showLog ? 'hide log' : 'show log' }}
-            </button>
-            <span v-if="ratingPending" class="spinner small" />
-          </span>
-        </div>
-        <div v-if="showLog && ratingLog.length" ref="logEl" class="rating-log">
-          <div v-for="(l, i) in ratingLog" :key="i" class="log-line">
-            <span class="log-t">{{ l.t }}s</span>{{ l.text }}
-          </div>
-        </div>
-        <div v-if="ratingError" class="error-box in-card">{{ ratingError }}</div>
-        <template v-if="rating && !ratingPending && ratingOpen">
-          <ul class="rating-factors">
-            <li v-for="f in rating.factors" :key="f.label">
-              <span class="factor-dot" :class="f.impact" />
-              <div class="risk-item">
-                <strong>{{ f.label }}</strong>
-                <div class="item-note">{{ f.detail }}</div>
-              </div>
-            </li>
-          </ul>
-          <template v-if="rating.readingOrder?.length">
-            <div class="reading-title">suggested reading order</div>
-            <ol class="reading-order">
-              <li v-for="e in rating.readingOrder" :key="e.path">
-                <a
-                  v-if="diffPaths.has(e.path)"
-                  :href="'#' + anchorFor(e.path)"
-                  class="reading-path"
-                  @click="onFileLinkClick($event, e.path)"
-                >{{ e.path }}</a>
-                <span v-else class="reading-path">{{ e.path }}</span>
-                <div class="item-note">{{ e.note }}</div>
-              </li>
-            </ol>
-          </template>
-        </template>
-      </div>
 
       <div class="rating-card">
-        <div
-          class="rating-head"
-          :class="{ clickable: risks && !riskPending }"
-          @click="risks && !riskPending && (riskOpen = !riskOpen)"
-        >
-          <span v-if="risks && !riskPending" class="rating-chevron">{{ riskOpen ? '▾' : '▸' }}</span>
-          <span class="card-title" :class="{ 'risk-title': risks }">{{ risks ? 'risk heatmap' : '✦ risk heatmap' }}</span>
-          <template v-if="risks">
-            <span class="risk-counts">
-              <span class="rc high">{{ riskCounts.high }} high</span>
-              <span class="rc medium">{{ riskCounts.medium }} medium</span>
-              <span class="rc low">{{ riskCounts.low }} low</span>
-            </span>
-            <span v-if="riskAt" class="rating-effort">mapped {{ timeAgo(riskAt) }}</span>
-            <span v-if="riskStale" class="stale-badge" title="the PR was pushed after this map was generated — re-run all tools to refresh">out of date</span>
-          </template>
+        <NuxtLink :to="summaryRoute" class="rating-head clickable card-link">
+          <span class="rating-chevron">▸</span>
+          <span class="card-title">✦ tool summary</span>
+          <span class="rating-effort">{{ summaryLine }}</span>
           <span class="head-actions">
-            <button
-              v-if="riskOpen && riskLog.length && !riskPending"
-              class="log-toggle"
-              @click.stop="showRiskLog = !showRiskLog"
-            >
-              {{ showRiskLog ? 'hide log' : 'show log' }}
-            </button>
-            <span v-if="riskPending" class="spinner small" />
+            <span v-if="anyPending" class="spinner small" />
+            <span class="rate-btn">open</span>
           </span>
-        </div>
-        <div v-if="showRiskLog && riskLog.length" ref="riskLogEl" class="rating-log">
-          <div v-for="(l, i) in riskLog" :key="i" class="log-line">
-            <span class="log-t">{{ l.t }}s</span>{{ l.text }}
-          </div>
-        </div>
-        <div v-if="riskError" class="error-box in-card">{{ riskError }}</div>
-        <template v-if="risks && !riskPending && riskOpen">
-          <ul class="risk-list">
-            <li v-for="r in visibleRisks" :key="r.path">
-              <span class="factor-dot" :class="'risk-' + r.level" />
-              <div class="risk-item">
-                <a
-                  v-if="diffPaths.has(r.path)"
-                  :href="'#' + anchorFor(r.path)"
-                  class="reading-path"
-                  @click="onFileLinkClick($event, r.path)"
-                >{{ r.path }}</a>
-                <span v-else class="reading-path">{{ r.path }}</span>
-                <div class="item-note">{{ r.note }}</div>
-              </div>
-            </li>
-          </ul>
-          <button
-            v-if="riskCounts.low && riskCounts.high + riskCounts.medium > 0"
-            class="show-low"
-            @click="showLowRisk = !showLowRisk"
-          >
-            {{ showLowRisk ? 'hide' : 'show' }} {{ riskCounts.low }} low-risk file{{ riskCounts.low === 1 ? '' : 's' }}
-          </button>
-        </template>
-      </div>
-      <div class="rating-card">
-        <div
-          class="rating-head"
-          :class="{ clickable: tour && !tourPending }"
-          @click="tour && !tourPending && (tourOpen = !tourOpen)"
-        >
-          <span v-if="tour && !tourPending" class="rating-chevron">{{ tourOpen ? '▾' : '▸' }}</span>
-          <span class="card-title">{{ tour ? 'guided tour' : '✦ guided tour' }}</span>
-          <template v-if="tour">
-            <span class="rating-effort">{{ tour.stops.length }} stops</span>
-            <span v-if="tourAt" class="rating-effort">written {{ timeAgo(tourAt) }}</span>
-            <span v-if="tourStale" class="stale-badge" title="the PR was pushed after this tour was written — re-run all tools to refresh">out of date</span>
-          </template>
-          <span class="head-actions">
-            <button
-              v-if="tourOpen && tourLog.length && !tourPending"
-              class="log-toggle"
-              @click.stop="showTourLog = !showTourLog"
-            >
-              {{ showTourLog ? 'hide log' : 'show log' }}
-            </button>
-            <span v-if="tourPending" class="spinner small" />
-          </span>
-        </div>
-        <div v-if="showTourLog && tourLog.length" ref="tourLogEl" class="rating-log">
-          <div v-for="(l, i) in tourLog" :key="i" class="log-line">
-            <span class="log-t">{{ l.t }}s</span>{{ l.text }}
-          </div>
-        </div>
-        <div v-if="tourError" class="error-box in-card">{{ tourError }}</div>
-        <template v-if="tour && !tourPending && tourOpen">
-          <div class="summary-md tour-overview" v-html="renderMarkdown(tour.overview)" />
-          <div class="reading-title">stops</div>
-          <ol class="reading-order">
-            <li v-for="(s, i) in tour.stops" :key="i" :class="{ 'stop-active': tourIndex === i }">
-              <strong class="stop-title">{{ s.title }}</strong>
-              <div>
-                <a
-                  v-if="diffPaths.has(s.path)"
-                  href="#"
-                  class="reading-path"
-                  @click.prevent="jumpToStop(i)"
-                >{{ s.path }}:{{ s.line }}</a>
-                <span v-else class="reading-path">{{ s.path }}:{{ s.line }}</span>
-              </div>
-              <div class="item-note">{{ s.note }}</div>
-            </li>
-          </ol>
-        </template>
-      </div>
-      <div id="self-card" class="rating-card">
-        <div
-          class="rating-head"
-          :class="{ clickable: selfQs && !selfPending }"
-          @click="selfQs && !selfPending && (selfOpen = !selfOpen)"
-        >
-          <span v-if="selfQs && !selfPending" class="rating-chevron">{{ selfOpen ? '▾' : '▸' }}</span>
-          <span class="card-title">{{ selfQs ? 'ask yourself' : '✦ ask yourself' }}</span>
-          <template v-if="selfQs">
-            <span class="rating-effort">{{ answeredCount }}/{{ selfQs.length }} answered</span>
-            <span v-if="selfAt" class="rating-effort">asked {{ timeAgo(selfAt) }}</span>
-            <span v-if="selfStale" class="stale-badge" title="the PR was pushed after these questions were posed — re-run all tools to refresh">out of date</span>
-          </template>
-          <span class="head-actions">
-            <button
-              v-if="selfOpen && selfLog.length && !selfPending"
-              class="log-toggle"
-              @click.stop="showSelfLog = !showSelfLog"
-            >
-              {{ showSelfLog ? 'hide log' : 'show log' }}
-            </button>
-            <span v-if="selfPending" class="spinner small" />
-          </span>
-        </div>
-        <div v-if="showSelfLog && selfLog.length" ref="selfLogEl" class="rating-log">
-          <div v-for="(l, i) in selfLog" :key="i" class="log-line">
-            <span class="log-t">{{ l.t }}s</span>{{ l.text }}
-          </div>
-        </div>
-        <div v-if="selfError" class="error-box in-card">{{ selfError }}</div>
-        <template v-if="selfQs && !selfPending && selfOpen">
-          <ol class="reading-order self-list">
-            <li v-for="(q, i) in selfQs" :key="i">
-              <strong class="stop-title">{{ q.topic }}</strong>
-              <div class="self-question">{{ q.question }}</div>
-              <div class="item-note">{{ q.why }}</div>
-              <textarea
-                v-model="q.answer"
-                class="self-answer"
-                rows="3"
-                placeholder="your answer — saved as you go, posted only when you say so"
-                @blur="saveAnswer(i)"
-              />
-              <div class="self-actions">
-                <a v-if="q.postedUrl" :href="q.postedUrl" target="_blank" rel="noopener" class="posted-link">posted ↗</a>
-                <button
-                  class="rate-btn"
-                  :disabled="!q.answer.trim() || postingIdx !== null"
-                  :title="q.answer.trim() ? 'post this question + your answer to the PR as a comment' : 'write an answer first'"
-                  @click="postAnswer(i)"
-                >
-                  <span v-if="postingIdx === i" class="spinner small" />
-                  {{ postingIdx === i ? 'posting' : q.postedUrl ? 'post again' : 'post to PR' }}
-                </button>
-              </div>
-            </li>
-          </ol>
-        </template>
+        </NuxtLink>
       </div>
       <div class="rating-card">
         <div class="rating-head clickable" @click="diff && (showGraph = true)">
@@ -1063,8 +679,15 @@ function openSelfCard() {
   font-weight: 700;
   color: var(--text);
 }
+.bar-end { margin-left: auto; }
+/* The comment toggle floats at the viewport's top right so it stays in
+   reach while scrolling the diff; the lifted shadow (shared with the tour
+   bar) keeps it legible over code. */
 .toggle {
-  margin-left: auto;
+  position: fixed;
+  top: 14px;
+  right: 20px;
+  z-index: 25;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--muted);
@@ -1072,6 +695,7 @@ function openSelfCard() {
   padding: 4px 12px;
   cursor: pointer;
   font-size: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
 .toggle.on {
   color: var(--text);
@@ -1086,7 +710,8 @@ function openSelfCard() {
   text-wrap: balance;
 }
 
-/* Briefing: verdict + tour launch sit at the top; detail cards follow. */
+/* Briefing: verdict + tour launch sit at the top; the detail cards live on
+   the tool summary page. */
 .verdict {
   font-size: 14px;
   font-weight: 600;
@@ -1183,7 +808,6 @@ function openSelfCard() {
 }
 .rate-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .rate-btn:disabled { cursor: default; opacity: 0.7; }
-.rate-btn.on { color: var(--text); border-color: var(--accent); }
 .rating-log {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1204,6 +828,9 @@ function openSelfCard() {
   color: var(--accent);
   opacity: 0.8;
 }
+/* Open-state content indents to the label, past the chevron. */
+.rating-card > :not(.rating-head) { margin-left: 21px; }
+.error-box.in-card { margin: 10px 0 2px; }
 .log-toggle {
   border: 1px solid var(--border);
   background: var(--panel-2);
@@ -1216,8 +843,9 @@ function openSelfCard() {
 }
 .log-toggle:hover { color: var(--text); }
 .spinner.small { width: 10px; height: 10px; border-width: 2px; }
-/* Artifact rows: carved accordion cards. Panel fill + 1px border makes each
-   row read as a control; hover wakes the border with Cursor Blue. */
+/* Launch rows: carved cards in the same idiom as the summary page's
+   accordions. Panel fill + 1px border makes each row read as a control;
+   hover wakes the border with Cursor Blue. */
 .rating-card {
   margin-top: 8px;
   padding: 10px 14px;
@@ -1241,6 +869,8 @@ function openSelfCard() {
 }
 .rating-head.clickable:hover .card-title { color: var(--text); }
 .rating-head.clickable:hover .rating-chevron { color: var(--accent); }
+a.card-link,
+a.card-link:hover { color: inherit; text-decoration: none; }
 .rating-chevron { color: var(--muted); font-size: 11px; }
 .card-title {
   font-family: var(--mono);
@@ -1254,9 +884,6 @@ function openSelfCard() {
   gap: 8px;
   align-items: baseline;
 }
-/* Open-state content indents to the label, past the chevron. */
-.rating-card > :not(.rating-head) { margin-left: 21px; }
-.error-box.in-card { margin: 10px 0 2px; }
 .rating-score {
   font-family: var(--mono);
   font-size: 12px;
@@ -1266,7 +893,13 @@ function openSelfCard() {
 .rating-score.good { color: var(--green); }
 .rating-score.mid { color: var(--accent); }
 .rating-score.bad { color: var(--red); }
-.rating-effort { color: var(--muted); font-size: 12px; }
+.rating-effort {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .stale-badge {
   font-size: 11px;
   font-family: var(--mono);
@@ -1276,110 +909,6 @@ function openSelfCard() {
   padding: 0 8px;
   white-space: nowrap;
 }
-.rating-factors {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 12px;
-}
-.rating-factors li {
-  display: flex;
-  gap: 8px;
-}
-.rating-factors strong { color: var(--text); font-weight: 600; }
-.factor-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-top: 4px;
-  background: var(--border);
-}
-.risk-item { min-width: 0; }
-.item-note {
-  color: var(--muted);
-  line-height: 1.5;
-  margin-top: 2px;
-}
-.factor-dot.good { background: var(--green); }
-.factor-dot.bad { background: var(--red); }
-.risk-title { font-weight: 600; }
-.risk-counts {
-  display: flex;
-  gap: 10px;
-  font-family: var(--mono);
-  font-size: 12px;
-}
-.rc.high { color: var(--red); }
-.rc.medium { color: #d29922; }
-.rc.low { color: var(--green); }
-.risk-list {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 12px;
-}
-.risk-list li {
-  display: flex;
-  gap: 8px;
-}
-.factor-dot.risk-high { background: var(--red); }
-.factor-dot.risk-medium { background: #d29922; }
-.factor-dot.risk-low { background: var(--green); }
-.show-low {
-  margin-top: 10px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  border-radius: 6px;
-  padding: 3px 10px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.show-low:hover { color: var(--text); border-color: var(--accent); }
-.tour-overview {
-  margin: 10px 0 4px;
-  font-size: 13px;
-  line-height: 1.55;
-}
-.stop-title { font-size: 12px; }
-.reading-order li.stop-active .stop-title { color: var(--accent); }
-.self-list { margin-top: 12px; }
-.self-question {
-  margin-top: 2px;
-  line-height: 1.5;
-}
-.self-answer {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.5;
-  resize: vertical;
-  outline: none;
-}
-.self-answer:focus { border-color: var(--accent); }
-.self-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: baseline;
-  gap: 10px;
-  margin-top: 6px;
-}
-.posted-link { font-size: 12px; }
 
 /* Fullscreen file map overlay */
 .graph-overlay {
@@ -1486,29 +1015,6 @@ function openSelfCard() {
   border-color: var(--accent);
   color: #fff;
 }
-.reading-title {
-  margin: 12px 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-.reading-order {
-  margin: 0;
-  padding-left: 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 12px;
-}
-.reading-order li::marker { color: var(--muted); }
-.reading-path {
-  font-family: var(--mono);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-span.reading-path { color: var(--text); }
 .summary {
   border: 1px solid var(--border);
   border-radius: 8px;
