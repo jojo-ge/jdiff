@@ -8,8 +8,9 @@ import https from 'node:https'
 import http from 'node:http'
 
 // --- base url --------------------------------------------------------------
-// default host; user is setting up jdiff.local with (self-signed) TLS.
-const DEFAULT_BASE = 'https://jdiff.local'
+// Default host: the jSuite Caddy edge (~/code/anyway/jsuite) terminates TLS for
+// jdiff.local on :7443 — not :443, which the kraken/phoenix dev runtime owns.
+const DEFAULT_BASE = 'https://jdiff.local:7443'
 // strip trailing slash so we can concatenate paths cleanly.
 const BASE = (process.env.JDIFF_URL || DEFAULT_BASE).replace(/\/+$/, '')
 
@@ -121,7 +122,7 @@ function healthCheck(base) {
 
 function warnUnreachable(base) {
   process.stderr.write(
-    `warning: jDiff server not reachable at ${base} — is it running? (pnpm dev in the jDiff repo)\n`
+    `warning: jDiff server not reachable at ${base} — start the suite: ~/code/anyway/jsuite/jsuite start\n`
   )
 }
 
@@ -160,7 +161,7 @@ examples:
   jdiff pr 123
   jdiff branch my-feature main
   jdiff open -C ~/code/other-repo
-  JDIFF_URL=https://localhost:3000 jdiff pr 42 --print
+  JDIFF_URL=http://localhost:3002 jdiff pr 42 --print   # bypass the edge
 `
 }
 

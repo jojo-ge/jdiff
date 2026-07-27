@@ -7,7 +7,13 @@ import type { ReviewRating } from '../utils/aiArtifacts'
 // run. One prompt asks for four marker-delimited sections; each section is
 // parsed, saved, and pushed to the client independently, so one malformed
 // section doesn't take the others down.
-const MAX_DIFF_CHARS = 60_000
+//
+// The diff body is NOT inlined into the prompt. claude runs with cwd set to
+// the repo under review and reads the change itself with `git diff <range>`,
+// so there is no size ceiling to truncate against and it can pull surrounding
+// context for any hunk it cares about. The prompt carries only what git can't
+// cheaply tell it (title/description) and what we want it to agree with us on
+// (the file list and per-category totals the UI already computed).
 
 // Split the response on marker lines like ===RATING===; anything before the
 // first marker (preamble prose) is dropped.
@@ -57,12 +63,9 @@ export default defineEventHandler(async (event) => {
       const meta = await targetMeta(prepared, path)
       const headRef = prepared.headRef
 
-      log('computing diff locally…')
+      log('computing change stats locally…')
       const range = prepared.range
-      const [numstat, diff] = await Promise.all([
-        run('git', ['diff', '--numstat', '-M', range], path),
-        run('git', ['diff', '--no-color', '-M', range], path),
-      ])
+      const numstat = await run('git', ['diff', '--numstat', '-M', range], path)
 
       // Per-file list (for the risk map) and per-category totals (for the
       // rating) from the same numstat pass.
@@ -100,19 +103,22 @@ export default defineEventHandler(async (event) => {
         })
         .join('\n')
 
-      // Identifies "same code, new run" so the consistency review can pin
-      // the score to the previous rating when nothing changed.
-      const diffHash = createHash('sha256').update(diff).digest('hex')
+      // Identifies "same code, new run" so the consistency review can pin the
+      // score to the previous rating when nothing changed. The two endpoints
+      // of the three-dot range pin the diff exactly, and cost two rev-parses
+      // instead of materialising the whole diff just to hash it.
+      const [leftRef, rightRef] = range.split('...')
+      const mergeBase = (await run('git', ['merge-base', leftRef!, rightRef!], path)).trim()
+      const diffHash = createHash('sha256').update(`${mergeBase}..${prepared.headOid}`).digest('hex')
       const previous = loadRating(path, storeKey)
 
-      const truncated = diff.length > MAX_DIFF_CHARS
-      const diffSnippet = truncated ? diff.slice(0, MAX_DIFF_CHARS) : diff
-      log(
-        `diff is ${diff.length.toLocaleString()} chars` +
-        (truncated ? ` — truncating to ${MAX_DIFF_CHARS.toLocaleString()} for the prompt` : ''),
-      )
+      const prompt = `You are preparing four pieces of review guidance for a code change in a single pass: a reviewability rating, a per-file risk map, a guided tour, and big-picture questions the reviewer must answer for themselves.
 
-      const prompt = `You are preparing four pieces of review guidance for a code change in a single pass: a reviewability rating, a per-file risk map, a guided tour, and big-picture questions the reviewer must answer for themselves. You are running inside the repository being reviewed, with the change's head available as the git ref ${headRef} — use your tools (Read, Grep, Glob, Bash with git show/git diff) to understand the change well enough to do all four, especially the parts of the diff below that were truncated or that need surrounding context.
+You are running inside the repository being reviewed. The change is the git range ${range}, and its head is the ref ${headRef}. Nothing about the code is included below — read the change yourself before answering:
+- \`git diff ${range}\` for the whole diff, or \`git diff ${range} -- <path>\` one file at a time when it is large.
+- \`git log ${range}\` for how the change was built up commit by commit.
+- Read/Grep/Glob and \`git show ${headRef}:<path>\` for the surrounding code a hunk doesn't show — callers of a changed function, the tests that cover it, whether a removed branch is dead everywhere.
+Read enough to be specific. A tour stop or risk rating that could have been written from the file names alone is not worth showing a reviewer.
 
 ${targetLabel(target)}: ${meta.title}
 Description:
@@ -123,9 +129,6 @@ ${fileLines.join('\n')}
 
 File breakdown by category (source changes cost the most review effort; tests and docs are cheaper to review; generated files/lockfiles are near-free):
 ${breakdown || '- (no files changed)'}
-
-Diff${truncated ? ` (truncated to first ${MAX_DIFF_CHARS} characters — files missing from it are still listed above; inspect the rest with git diff ${range} yourself)` : ''}:
-${diffSnippet}
 
 Respond with ONLY the four sections below, in this order. Begin each section with its marker on a line of its own, exactly as shown (===RATING===, ===RISK===, ===TOUR===, ===QUESTIONS===). No markdown fences anywhere.
 
@@ -146,8 +149,13 @@ ${tourFormat(headRef)}
 Questions that make the reviewer think critically before signing off. ONLY the ${QUESTION_COUNT} questions, no JSON, each in exactly this labelled plain-text format with a line containing just --- between questions:
 ${QUESTIONS_FORMAT}`
 
-      log('starting claude (one run for all four tools — this is the slow part)…')
-      const resultText = await runClaude(prompt, { log, signal })
+      log('starting claude in the repo (one run for all four tools — this is the slow part)…')
+      const resultText = await runClaude(prompt, {
+        cwd: path,
+        allowedTools: ANALYSIS_TOOLS,
+        log,
+        signal,
+      })
       const sections = splitSections(resultText)
       const createdAt = new Date().toISOString()
 
@@ -221,7 +229,10 @@ ${QUESTIONS_FORMAT}`
               candidate,
               previous: previous && previous.diffHash === diffHash ? previous.rating : null,
             }),
-            { log, signal, model: 'claude-opus-4-8' },
+            // Judges the candidate rating against the facts in its own
+            // prompt, so it needs no tools — but it still runs in the repo in
+            // case it wants to sanity-check a claim.
+            { cwd: path, log, signal, model: 'claude-opus-4-8' },
           )))
           saveRating({ repo: path, number: storeKey, rating: reviewed, createdAt, diffHash })
           log(reviewed.score === candidate.score

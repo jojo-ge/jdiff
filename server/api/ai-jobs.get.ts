@@ -9,7 +9,12 @@ export default defineEventHandler((event) => {
   const path = resolveRepoDir(String(query.repo ?? ''))
   if (query.number || query.branch) {
     const target = resolveTarget(event)
-    return { running: runningAiJobs(path, target.storeKey) }
+    // `failures` explains a run that died while nothing was attached to its
+    // stream, so re-attaching shows the reason instead of an empty result.
+    return {
+      running: runningAiJobs(path, target.storeKey),
+      failures: recentAiFailures(path, target.storeKey),
+    }
   }
   const prs: Record<string, AiJobKind[]> = {}
   for (const job of allRunningAiJobs(path)) {

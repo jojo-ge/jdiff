@@ -4,7 +4,7 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   css: ['~/assets/css/main.css'],
   ssr: false,
-  // Served behind the jSuite Caddy edge at https://jdiff.local — allow that
+  // Served behind the jSuite Caddy edge at https://jdiff.local:7443 — allow that
   // host through Vite's dev-server host check (localhost access is unaffected).
   vite: {
     server: { allowedHosts: ['jdiff.local'] },

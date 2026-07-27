@@ -69,6 +69,29 @@ const ANALYZE_TOOL: Record<string, AiToolKind> = {
   questions: 'self',
 }
 
+// …and the reverse, for matching a recorded failure back to its panel.
+const TOOL_NAME: Record<AiToolKind, string> = {
+  rating: 'rating',
+  risk: 'risk',
+  tour: 'tour',
+  self: 'questions',
+}
+
+// A failure recorded by the server for a run that has already finished.
+export interface AiJobFailure {
+  jobKind: string
+  tool?: string
+  message: string
+  at: string
+}
+
+// The tool's own failure if it has one, otherwise a whole-run failure (which
+// took every tool down with it).
+function failureFor(failures: AiJobFailure[], kind: AiToolKind): string {
+  const own = failures.find((f) => f.tool === TOOL_NAME[kind])
+  return (own ?? failures.find((f) => !f.tool))?.message ?? ''
+}
+
 function blankTool(): AiToolState {
   return { pending: false, error: '', log: [], showLog: false, result: null }
 }
@@ -135,14 +158,15 @@ function attach(store: Store, repo: string, target: ReviewTarget, kind: AiToolKi
     // event — settle it from the saved artifact instead of spinning forever.
     if (msg.kind === 'done') {
       close()
-      const pendingKinds = kind === 'analyze' ? TOOL_KINDS : [kind]
-      for (const k of pendingKinds) {
+      const unsettled: AiToolKind[] = []
+      for (const k of (kind === 'analyze' ? TOOL_KINDS : [kind])) {
         if (pr[k].pending) {
           pr[k].pending = false
           pr[k].showLog = false
-          settleFromStore(pr[k], k, repo, target)
+          unsettled.push(k)
         }
       }
+      void settleAll(pr, unsettled, repo, target)
       return
     }
     if (kind !== 'analyze') {
@@ -211,9 +235,11 @@ async function reattach(store: Store, repo: string, target: ReviewTarget) {
   const id = targetId(target)
   const pr = ensurePr(store, repo, id)
   let running: string[]
+  let failures: AiJobFailure[]
   try {
-    const res = await $fetch<{ running: string[] }>('/api/ai-jobs', { query: { repo, ...targetQuery(target) } })
+    const res = await $fetch<{ running: string[]; failures?: AiJobFailure[] }>('/api/ai-jobs', { query: { repo, ...targetQuery(target) } })
     running = res.running
+    failures = res.failures ?? []
   } catch {
     return
   }
@@ -223,22 +249,48 @@ async function reattach(store: Store, repo: string, target: ReviewTarget) {
   }
   for (const k of TOOL_KINDS) {
     if (pr[k].pending && !running.includes('analyze') && !sources.has(sourceKey(repo, id, k))) {
-      // Finished while detached: the artifact is saved; fetch it so the
-      // page doesn't stay stuck on a spinner.
+      // Finished (or died) while detached: settle from the saved artifact so
+      // the page doesn't stay stuck on a spinner, and if nothing was saved,
+      // show the reason the run recorded.
       pr[k].pending = false
       pr[k].showLog = false
-      settleFromStore(pr[k], k, repo, target)
+      void settleFromStore(pr[k], k, repo, target, failures)
     }
   }
 }
 
-async function settleFromStore(t: AiToolState, kind: AiToolKind, repo: string, target: ReviewTarget) {
+async function settleFromStore(
+  t: AiToolState,
+  kind: AiToolKind,
+  repo: string,
+  target: ReviewTarget,
+  failures: AiJobFailure[] = [],
+) {
   try {
     const saved = await $fetch<Record<string, any> | null>(SAVED_ENDPOINT[kind], {
       query: { repo, ...targetQuery(target) },
     })
-    if (saved) t.result = saved
+    if (saved) {
+      t.result = saved
+      return
+    }
   } catch { /* the page's own saved-artifact fetch remains the fallback */ }
+  // Nothing was produced: say why rather than leaving a blank panel.
+  if (!t.error) t.error = failureFor(failures, kind)
+}
+
+// Settle a batch of tools that stopped without a result, fetching the run's
+// recorded failures once so each panel can show its own reason.
+async function settleAll(pr: PrAiTasks, kinds: AiToolKind[], repo: string, target: ReviewTarget) {
+  if (!kinds.length) return
+  let failures: AiJobFailure[] = []
+  try {
+    const res = await $fetch<{ failures?: AiJobFailure[] }>('/api/ai-jobs', {
+      query: { repo, ...targetQuery(target) },
+    })
+    failures = res.failures ?? []
+  } catch { /* no reason available; the artifact fetch still decides the panel */ }
+  await Promise.all(kinds.map((k) => settleFromStore(pr[k], k, repo, target, failures)))
 }
 
 export function useAiTasks(repo: Ref<string>, target: Ref<ReviewTarget>) {

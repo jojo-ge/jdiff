@@ -80,6 +80,9 @@ Answer the question directly, grounded in this repository's actual code. Be brie
       log('starting claude…')
       const answer = await runClaude(prompt, {
         cwd: repoPath,
+        // This prompt tells claude to go read the repo; without the grant a
+        // headless run has every one of those tool calls refused.
+        allowedTools: ANALYSIS_TOOLS,
         signal: abort.signal,
         log,
         onThinking: (text) => push('thinking', { text }),
