@@ -29,14 +29,14 @@ function splitSections(text: string): Partial<Record<string, string>> {
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const path = resolveRepoDir(String(query.repo ?? ''))
-  const number = String(query.number ?? '')
-  if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad ?number=' })
+  const target = resolveTarget(event)
+  const storeKey = target.storeKey
 
   // ?attach=1 re-attaches to a run that is already in flight without ever
   // starting one — used when reconnecting after a reload or navigation, where
   // "the job finished in the meantime" must not silently kick off a new run.
   if (String(query.attach ?? '') === '1') {
-    const existing = getAiJob('analyze', path, number)
+    const existing = getAiJob('analyze', path, storeKey)
     if (existing) return aiJobStream(event, existing)
     const stream = createEventStream(event)
     stream.push(JSON.stringify({ kind: 'done', t: '0.0' })).then(() => stream.close())
@@ -50,27 +50,15 @@ export default defineEventHandler(async (event) => {
   const job = startOrAttachAiJob({
     kind: 'analyze',
     repo: path,
-    number,
+    number: storeKey,
     work: async ({ log, push, signal }) => {
-      log('fetching PR metadata via gh…')
-      const meta = JSON.parse(
-        await run('gh', ['pr', 'view', number, '--json', 'title,body,baseRefName'], path),
-      )
-      const base: string = meta.baseRefName
-
-      log(`fetching refs for origin/${base} and PR #${number}…`)
-      await run(
-        'git',
-        [
-          'fetch', '--quiet', 'origin',
-          `+refs/heads/${base}:refs/remotes/origin/${base}`,
-          `+refs/pull/${number}/head:refs/jdiff/pr-${number}`,
-        ],
-        path,
-      )
+      log('resolving refs & metadata…')
+      const prepared = await prepareTarget(target, path)
+      const meta = await targetMeta(prepared, path)
+      const headRef = prepared.headRef
 
       log('computing diff locally…')
-      const range = `origin/${base}...refs/jdiff/pr-${number}`
+      const range = prepared.range
       const [numstat, diff] = await Promise.all([
         run('git', ['diff', '--numstat', '-M', range], path),
         run('git', ['diff', '--no-color', '-M', range], path),
@@ -115,7 +103,7 @@ export default defineEventHandler(async (event) => {
       // Identifies "same code, new run" so the consistency review can pin
       // the score to the previous rating when nothing changed.
       const diffHash = createHash('sha256').update(diff).digest('hex')
-      const previous = loadRating(path, number)
+      const previous = loadRating(path, storeKey)
 
       const truncated = diff.length > MAX_DIFF_CHARS
       const diffSnippet = truncated ? diff.slice(0, MAX_DIFF_CHARS) : diff
@@ -124,10 +112,10 @@ export default defineEventHandler(async (event) => {
         (truncated ? ` — truncating to ${MAX_DIFF_CHARS.toLocaleString()} for the prompt` : ''),
       )
 
-      const prompt = `You are preparing four pieces of review guidance for a pull request in a single pass: a reviewability rating, a per-file risk map, a guided tour, and big-picture questions the reviewer must answer for themselves. You are running inside the repository being reviewed, with the PR's head available as the git ref refs/jdiff/pr-${number} — use your tools (Read, Grep, Glob, Bash with git show/git diff) to understand the change well enough to do all four, especially the parts of the diff below that were truncated or that need surrounding context.
+      const prompt = `You are preparing four pieces of review guidance for a code change in a single pass: a reviewability rating, a per-file risk map, a guided tour, and big-picture questions the reviewer must answer for themselves. You are running inside the repository being reviewed, with the change's head available as the git ref ${headRef} — use your tools (Read, Grep, Glob, Bash with git show/git diff) to understand the change well enough to do all four, especially the parts of the diff below that were truncated or that need surrounding context.
 
-PR #${number}: ${meta.title}
-PR description:
+${targetLabel(target)}: ${meta.title}
+Description:
 ${meta.body || '(none)'}
 
 Changed files:
@@ -152,7 +140,7 @@ ${RISK_FORMAT}
 
 ===TOUR===
 A guided tour of the PR for a reviewer who has not seen it before, ordered as a narrative. A JSON object, in exactly this shape:
-${tourFormat(number)}
+${tourFormat(headRef)}
 
 ===QUESTIONS===
 Questions that make the reviewer think critically before signing off. ONLY the ${QUESTION_COUNT} questions, no JSON, each in exactly this labelled plain-text format with a line containing just --- between questions:
@@ -184,21 +172,21 @@ ${QUESTIONS_FORMAT}`
       let draftRating: ReviewRating | null = null
       await attempt('rating', () => {
         draftRating = cleanRating(extractJson(section('RATING')))
-        saveRating({ repo: path, number, rating: draftRating, createdAt, diffHash })
+        saveRating({ repo: path, number: storeKey, rating: draftRating, createdAt, diffHash })
         log('rating parsed')
         push('result', { tool: 'rating', rating: draftRating, createdAt })
       })
 
       await attempt('risk', () => {
         const risks = cleanRisks(extractJson(section('RISK')), knownPaths)
-        saveRiskMap({ repo: path, number, risks, createdAt })
+        saveRiskMap({ repo: path, number: storeKey, risks, createdAt })
         log(`rated ${risks.length}/${knownPaths.size} file(s)`)
         push('result', { tool: 'risk', risks, createdAt })
       })
 
       await attempt('tour', () => {
         const tour = cleanTour(extractJson(section('TOUR')))
-        saveTour({ repo: path, number, tour, createdAt })
+        saveTour({ repo: path, number: storeKey, tour, createdAt })
         log(`tour has ${tour.stops.length} stop(s)`)
         push('result', { tool: 'tour', tour, createdAt })
       })
@@ -208,7 +196,7 @@ ${QUESTIONS_FORMAT}`
         if (!questions.length) {
           throw createError({ statusCode: 500, message: 'claude returned no TOPIC/QUESTION/WHY blocks' })
         }
-        saveAskYourself({ repo: path, number, questions, createdAt })
+        saveAskYourself({ repo: path, number: storeKey, questions, createdAt })
         log(`claude posed ${questions.length} question(s)`)
         push('result', { tool: 'questions', questions, createdAt })
       })
@@ -228,14 +216,14 @@ ${QUESTIONS_FORMAT}`
           ].join('\n')
           const reviewed = cleanRating(extractJson(await runClaude(
             ratingReviewPrompt({
-              title: `#${number}: ${meta.title}`,
+              title: `${targetLabel(target)}: ${meta.title}`,
               facts,
               candidate,
               previous: previous && previous.diffHash === diffHash ? previous.rating : null,
             }),
             { log, signal, model: 'claude-opus-4-8' },
           )))
-          saveRating({ repo: path, number, rating: reviewed, createdAt, diffHash })
+          saveRating({ repo: path, number: storeKey, rating: reviewed, createdAt, diffHash })
           log(reviewed.score === candidate.score
             ? `review confirmed score ${candidate.score}`
             : `review adjusted score ${candidate.score} → ${reviewed.score}`)

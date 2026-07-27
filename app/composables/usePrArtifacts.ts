@@ -11,11 +11,14 @@ import type { Tour } from '~/utils/tour'
 // stay in the pages.
 export function usePrArtifacts(
   repo: Ref<string>,
-  number: Ref<string>,
+  target: Ref<ReviewTarget>,
   lastPushedAt: Ref<string | null | undefined>,
 ) {
-  const ai = useAiTasks(repo, number)
+  const ai = useAiTasks(repo, target)
   const { tasks } = ai
+
+  // Every saved-artifact fetch is keyed by repo + the target's params.
+  const q = computed(() => ({ repo: repo.value, ...targetQuery(target.value) }))
 
   // Artifacts are snapshots of the diff at generation time; a push after
   // that makes them out of date.
@@ -29,7 +32,7 @@ export function usePrArtifacts(
   const rating = ref<ReviewRating | null>(null)
   const ratedAt = ref('')
   const { data: savedRating } = useFetch<{ rating: ReviewRating; createdAt: string } | null>('/api/rating', {
-    query: { repo, number },
+    query: q,
   })
   watch(savedRating, (v) => {
     if (v && !rating.value) {
@@ -50,7 +53,7 @@ export function usePrArtifacts(
   const risks = ref<FileRisk[] | null>(null)
   const riskAt = ref('')
   const { data: savedRisks } = useFetch<{ risks: FileRisk[]; createdAt: string } | null>('/api/risk', {
-    query: { repo, number },
+    query: q,
   })
   watch(savedRisks, (v) => {
     if (v && !risks.value) {
@@ -81,7 +84,7 @@ export function usePrArtifacts(
   const tour = ref<Tour | null>(null)
   const tourAt = ref('')
   const { data: savedTour } = useFetch<{ tour: Tour; createdAt: string } | null>('/api/tour', {
-    query: { repo, number },
+    query: q,
   })
   watch(savedTour, (v) => {
     if (v && !tour.value) {
@@ -99,7 +102,7 @@ export function usePrArtifacts(
   const selfQs = ref<SelfQuestion[] | null>(null)
   const selfAt = ref('')
   const { data: savedSelf } = useFetch<{ questions: SelfQuestion[]; createdAt: string } | null>('/api/ask-yourself', {
-    query: { repo, number },
+    query: q,
   })
   watch(savedSelf, (v) => {
     if (v && !selfQs.value) {

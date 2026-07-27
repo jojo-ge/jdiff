@@ -7,8 +7,7 @@ const CONTEXT_LINES = 25
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const repoPath = resolveRepoDir(String(query.repo ?? ''))
-  const number = String(query.number ?? '')
-  if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad ?number=' })
+  const target = resolveTarget(event)
   const filePath = String(query.path ?? '')
   if (!filePath) throw createError({ statusCode: 400, message: 'missing ?path=' })
   const line = Number(query.line)
@@ -29,36 +28,26 @@ export default defineEventHandler(async (event) => {
   }
   const log = (text: string) => {
     push('log', { text })
-    console.log(`[ask #${number} ${filePath}:${line}] ${text}`)
+    console.log(`[ask ${targetLabel(target)} ${filePath}:${line}] ${text}`)
   }
 
   ;(async () => {
     try {
-      log('fetching PR metadata via gh…')
-      const meta = JSON.parse(
-        await run('gh', ['pr', 'view', number, '--json', 'title,baseRefName'], repoPath),
-      )
-      const base: string = meta.baseRefName
+      log('resolving refs & metadata…')
+      const prepared = await prepareTarget(target, repoPath)
+      const meta = await targetMeta(prepared, repoPath)
 
-      log(`fetching refs for origin/${base} and PR #${number}…`)
-      await run(
-        'git',
-        [
-          'fetch', '--quiet', 'origin',
-          `+refs/heads/${base}:refs/remotes/origin/${base}`,
-          `+refs/pull/${number}/head:refs/jdiff/pr-${number}`,
-        ],
-        repoPath,
-      )
-
-      const range = `origin/${base}...refs/jdiff/pr-${number}`
+      const range = prepared.range
       let fileDiff = await run('git', ['diff', '--no-color', '-M', range, '--', filePath], repoPath)
       const diffTruncated = fileDiff.length > MAX_FILE_DIFF_CHARS
       if (diffTruncated) fileDiff = fileDiff.slice(0, MAX_FILE_DIFF_CHARS)
 
       // The line the reviewer clicked, shown with surrounding context from
-      // whichever version of the file it belongs to.
-      const ref = side === 'LEFT' ? `origin/${base}` : `refs/jdiff/pr-${number}`
+      // whichever version of the file it belongs to. LEFT = the base version,
+      // RIGHT = the target's head version.
+      const ref = side === 'LEFT'
+        ? (target.kind === 'pr' ? `origin/${prepared.base}` : prepared.base)
+        : prepared.headRef
       let snippet = ''
       try {
         const lines = (await run('git', ['show', `${ref}:${filePath}`], repoPath)).split('\n')
@@ -72,9 +61,9 @@ export default defineEventHandler(async (event) => {
         log('could not load file snippet (file may be deleted on this side)')
       }
 
-      const prompt = `You are helping a code reviewer understand one specific line of a pull request. You are running inside the repository being reviewed — use your file tools (Read, Grep, Glob) to gather whatever context you need before answering.
+      const prompt = `You are helping a code reviewer understand one specific line of a code change under review. You are running inside the repository being reviewed — use your file tools (Read, Grep, Glob) to gather whatever context you need before answering.
 
-PR #${number}: ${meta.title}
+Change under review (${targetLabel(target)}): ${meta.title}
 File: ${filePath}
 Line ${line} — the ${side === 'LEFT' ? 'OLD version (this line is removed/changed by the PR; read it from the base branch, not the working tree)' : 'NEW version (as introduced by the PR)'} of the file.
 
@@ -100,7 +89,7 @@ Answer the question directly, grounded in this repository's actual code. Be brie
       const ask: SavedAsk = {
         id: randomUUID(),
         repo: repoPath,
-        number,
+        number: target.storeKey,
         path: filePath,
         line,
         side: side as 'LEFT' | 'RIGHT',

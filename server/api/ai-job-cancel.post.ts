@@ -7,9 +7,8 @@ const KINDS: AiJobKind[] = ['rating', 'risk', 'tour', 'self', 'analyze']
 export default defineEventHandler(async (event) => {
   const body = await readBody(event)
   const path = resolveRepoDir(String(body?.repo ?? ''))
-  const number = String(body?.number ?? '')
+  const target = resolveTargetFromBody(body)
   const kind = String(body?.kind ?? '') as AiJobKind
-  if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad number' })
   if (!KINDS.includes(kind)) throw createError({ statusCode: 400, message: 'bad kind' })
-  return { cancelled: cancelAiJob(kind, path, number) }
+  return { cancelled: cancelAiJob(kind, path, target.storeKey) }
 })

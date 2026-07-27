@@ -2,6 +2,9 @@
   "name": "jdiff",
   "type": "module",
   "private": true,
+  "bin": {
+    "jdiff": "./bin/jdiff.mjs"
+  },
   "scripts": {
     "build": "nuxt build",
     "dev": "nuxt dev",

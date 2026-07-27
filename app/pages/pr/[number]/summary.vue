@@ -39,7 +39,7 @@ const {
   selfStale,
   answeredCount,
   anyStale,
-} = usePrArtifacts(repo, number, computed(() => pr.value?.lastPushedAt ?? null))
+} = usePrArtifacts(repo, computed(() => ({ number: number.value })), computed(() => pr.value?.lastPushedAt ?? null))
 onMounted(() => { resumeAiTasks() })
 
 const reviewRoute = computed(() => ({

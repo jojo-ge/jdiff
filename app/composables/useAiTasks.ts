@@ -1,16 +1,35 @@
 // Global state for the claude review-guidance runs (rating, risk map, tour,
 // ask-yourself). The server runs each job detached from its SSE connection,
 // so this composable owns the client half of that contract: task state lives
-// in app-wide useState keyed by repo + PR (it survives route changes), the
+// in app-wide useState keyed by repo + target (it survives route changes), the
 // EventSources live at module scope (never closed on unmount), and landing
-// back on a PR page re-attaches to whatever is still running via
+// back on a review page re-attaches to whatever is still running via
 // /api/ai-jobs. Cancelling is an explicit POST — closing a stream only
 // stops watching.
 //
-// useAiTasks binds one PR (the PR page); useAiTasksHub binds a whole repo
-// (the list view: kick off runs per row, badge rows with running jobs).
+// A "target" is either a GitHub PR ({ number }) or a local branch
+// ({ branch, base? }); the id derived from it matches the server's storeKey,
+// so PR runs key by the bare number (keeping useAiTasksHub compatible) and
+// branch runs key by "branch/<name>".
+//
+// useAiTasks binds one target (a review page); useAiTasksHub binds a whole
+// repo (the PR list view: kick off runs per row, badge rows with running jobs).
 
 export type AiToolKind = 'rating' | 'risk' | 'tour' | 'self'
+
+export type ReviewTarget = { number: string } | { branch: string; base?: string }
+
+export function targetId(t: ReviewTarget): string {
+  return 'number' in t ? t.number : `branch/${t.branch}`
+}
+
+// Query params to identify this target to the server, as plain strings.
+export function targetQuery(t: ReviewTarget): Record<string, string> {
+  if ('number' in t) return { number: t.number }
+  const q: Record<string, string> = { branch: t.branch }
+  if (t.base) q.base = t.base
+  return q
+}
 
 export interface AiToolState {
   pending: boolean
@@ -58,8 +77,8 @@ function useAiTasksStore(): Store {
   return useState<Record<string, PrAiTasks>>('ai-tasks', () => ({}))
 }
 
-function ensurePr(store: Store, repo: string, number: string): PrAiTasks {
-  const key = `${repo} ${number}`
+function ensurePr(store: Store, repo: string, id: string): PrAiTasks {
+  const key = `${repo} ${id}`
   if (!store.value[key]) {
     store.value[key] = { rating: blankTool(), risk: blankTool(), tour: blankTool(), self: blankTool() }
   }
@@ -89,17 +108,18 @@ function handleToolMessage(t: AiToolState, msg: any) {
 // Live EventSources. Module scope: navigation must not close them.
 const sources = new Map<string, EventSource>()
 
-function sourceKey(repo: string, number: string, kind: AiToolKind | 'analyze'): string {
-  return `${repo} ${number} ${kind}`
+function sourceKey(repo: string, id: string, kind: AiToolKind | 'analyze'): string {
+  return `${repo} ${id} ${kind}`
 }
 
-function attach(store: Store, repo: string, number: string, kind: AiToolKind | 'analyze') {
-  const key = sourceKey(repo, number, kind)
+function attach(store: Store, repo: string, target: ReviewTarget, kind: AiToolKind | 'analyze') {
+  const id = targetId(target)
+  const key = sourceKey(repo, id, kind)
   if (sources.has(key)) return
-  const pr = ensurePr(store, repo, number)
+  const pr = ensurePr(store, repo, id)
 
   const url = kind === 'analyze' ? '/api/analyze-generate' : ENDPOINT[kind]
-  const params = new URLSearchParams({ repo, number })
+  const params = new URLSearchParams({ repo, ...targetQuery(target) })
   const es = new EventSource(`${url}?${params}`)
   sources.set(key, es)
 
@@ -120,7 +140,7 @@ function attach(store: Store, repo: string, number: string, kind: AiToolKind | '
         if (pr[k].pending) {
           pr[k].pending = false
           pr[k].showLog = false
-          settleFromStore(pr[k], k, repo, number)
+          settleFromStore(pr[k], k, repo, target)
         }
       }
       return
@@ -146,117 +166,94 @@ function attach(store: Store, repo: string, number: string, kind: AiToolKind | '
     const stillWaiting = kind === 'analyze'
       ? TOOL_KINDS.some((k) => pr[k].pending)
       : pr[kind].pending
-    if (stillWaiting) setTimeout(() => reattach(store, repo, number), 1500)
+    if (stillWaiting) setTimeout(() => reattach(store, repo, target), 1500)
   }
 }
 
-function startFor(store: Store, repo: string, number: string, kind: AiToolKind) {
-  if (import.meta.server) return
-  const pr = ensurePr(store, repo, number)
-  if (pr[kind].pending) return
-  resetTool(pr[kind])
-  attach(store, repo, number, kind)
-}
-
 // All four artifacts from a single claude run against /api/analyze-generate.
-function startAllFor(store: Store, repo: string, number: string) {
+function startAllFor(store: Store, repo: string, target: ReviewTarget) {
   if (import.meta.server) return
-  const pr = ensurePr(store, repo, number)
+  const pr = ensurePr(store, repo, targetId(target))
   if (TOOL_KINDS.some((k) => pr[k].pending)) return
   for (const k of TOOL_KINDS) resetTool(pr[k])
-  attach(store, repo, number, 'analyze')
+  attach(store, repo, target, 'analyze')
 }
 
-function requestCancel(repo: string, number: string, kind: AiToolKind | 'analyze') {
-  $fetch('/api/ai-job-cancel', { method: 'POST', body: { repo, number, kind } })
+function requestCancel(repo: string, target: ReviewTarget, kind: AiToolKind | 'analyze') {
+  $fetch('/api/ai-job-cancel', { method: 'POST', body: { repo, ...targetQuery(target), kind } })
     .catch(() => { /* job may have just finished; nothing to kill */ })
 }
 
-function closeSource(repo: string, number: string, kind: AiToolKind | 'analyze') {
-  const key = sourceKey(repo, number, kind)
+function closeSource(repo: string, id: string, kind: AiToolKind | 'analyze') {
+  const key = sourceKey(repo, id, kind)
   sources.get(key)?.close()
   sources.delete(key)
 }
 
-function cancelFor(store: Store, repo: string, number: string, kind: AiToolKind) {
-  // During a combined run the four tools share one claude process, so
-  // cancelling any one of them cancels the run.
-  if (sources.has(sourceKey(repo, number, 'analyze'))) return cancelAllFor(store, repo, number)
-  const pr = ensurePr(store, repo, number)
-  closeSource(repo, number, kind)
-  pr[kind].pending = false
-  pr[kind].showLog = false
-  requestCancel(repo, number, kind)
-}
-
-function cancelAllFor(store: Store, repo: string, number: string) {
-  const pr = ensurePr(store, repo, number)
-  if (sources.has(sourceKey(repo, number, 'analyze'))) {
-    closeSource(repo, number, 'analyze')
-    requestCancel(repo, number, 'analyze')
-    for (const k of TOOL_KINDS) {
-      pr[k].pending = false
-      pr[k].showLog = false
-    }
-    return
+function cancelAllFor(store: Store, repo: string, target: ReviewTarget) {
+  const id = targetId(target)
+  const pr = ensurePr(store, repo, id)
+  // Kill the run server-side (all four tools share one claude process) and
+  // stop watching — even if the stream was already dropped, clear the pending
+  // spinners so the page doesn't hang.
+  closeSource(repo, id, 'analyze')
+  requestCancel(repo, target, 'analyze')
+  for (const k of TOOL_KINDS) {
+    pr[k].pending = false
+    pr[k].showLog = false
   }
-  for (const k of TOOL_KINDS) if (pr[k].pending) cancelFor(store, repo, number, k)
 }
 
-// Re-attach to whatever the server is still running for this PR. Tools we
+// Re-attach to whatever the server is still running for this target. Tools we
 // thought were pending but that finished (or died) while no stream was
 // watching settle from their saved artifacts.
-async function reattach(store: Store, repo: string, number: string) {
-  const pr = ensurePr(store, repo, number)
+async function reattach(store: Store, repo: string, target: ReviewTarget) {
+  const id = targetId(target)
+  const pr = ensurePr(store, repo, id)
   let running: string[]
   try {
-    const res = await $fetch<{ running: string[] }>('/api/ai-jobs', { query: { repo, number } })
+    const res = await $fetch<{ running: string[] }>('/api/ai-jobs', { query: { repo, ...targetQuery(target) } })
     running = res.running
   } catch {
     return
   }
   if (running.includes('analyze')) {
     for (const k of TOOL_KINDS) if (!pr[k].pending) resetTool(pr[k])
-    attach(store, repo, number, 'analyze')
+    attach(store, repo, target, 'analyze')
   }
   for (const k of TOOL_KINDS) {
-    if (running.includes(k)) {
-      if (!pr[k].pending) resetTool(pr[k])
-      attach(store, repo, number, k)
-    } else if (pr[k].pending && !running.includes('analyze') && !sources.has(sourceKey(repo, number, k))) {
+    if (pr[k].pending && !running.includes('analyze') && !sources.has(sourceKey(repo, id, k))) {
       // Finished while detached: the artifact is saved; fetch it so the
       // page doesn't stay stuck on a spinner.
       pr[k].pending = false
       pr[k].showLog = false
-      settleFromStore(pr[k], k, repo, number)
+      settleFromStore(pr[k], k, repo, target)
     }
   }
 }
 
-async function settleFromStore(t: AiToolState, kind: AiToolKind, repo: string, number: string) {
+async function settleFromStore(t: AiToolState, kind: AiToolKind, repo: string, target: ReviewTarget) {
   try {
     const saved = await $fetch<Record<string, any> | null>(SAVED_ENDPOINT[kind], {
-      query: { repo, number },
+      query: { repo, ...targetQuery(target) },
     })
     if (saved) t.result = saved
   } catch { /* the page's own saved-artifact fetch remains the fallback */ }
 }
 
-export function useAiTasks(repo: Ref<string>, number: Ref<string>) {
+export function useAiTasks(repo: Ref<string>, target: Ref<ReviewTarget>) {
   const store = useAiTasksStore()
-  const tasks = computed(() => ensurePr(store, repo.value, number.value))
+  const tasks = computed(() => ensurePr(store, repo.value, targetId(target.value)))
   const anyPending = computed(() => TOOL_KINDS.some((k) => tasks.value[k].pending))
 
   return {
     tasks,
     anyPending,
-    start: (kind: AiToolKind) => startFor(store, repo.value, number.value, kind),
-    startAll: () => startAllFor(store, repo.value, number.value),
-    cancel: (kind: AiToolKind) => cancelFor(store, repo.value, number.value, kind),
-    cancelAll: () => cancelAllFor(store, repo.value, number.value),
+    startAll: () => startAllFor(store, repo.value, target.value),
+    cancelAll: () => cancelAllFor(store, repo.value, target.value),
     resume: async () => {
       if (import.meta.server) return
-      await reattach(store, repo.value, number.value)
+      await reattach(store, repo.value, target.value)
     },
   }
 }
@@ -288,7 +285,7 @@ export function useAiTasksHub(repo: Ref<string>) {
   }
 
   function startAll(number: string | number) {
-    startAllFor(store, repo.value, String(number))
+    startAllFor(store, repo.value, { number: String(number) })
   }
 
   let timer: ReturnType<typeof setInterval> | undefined

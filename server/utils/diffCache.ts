@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { FilePayload } from '../api/diff.get'
+import type { FilePayload } from './buildDiff'
 
 export interface CachedDiff {
   headOid: string

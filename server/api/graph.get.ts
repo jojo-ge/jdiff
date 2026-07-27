@@ -134,24 +134,11 @@ export default defineEventHandler(async (event): Promise<{
   clusters: GraphCluster[]
 }> => {
   const path = resolveRepoPath(event)
-  const number = String(getQuery(event).number ?? '')
-  if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad ?number=' })
+  const target = resolveTarget(event)
+  const prepared = await prepareTarget(target, path)
 
-  const meta = JSON.parse(await run('gh', ['pr', 'view', number, '--json', 'baseRefName'], path))
-  const base: string = meta.baseRefName
-
-  await run(
-    'git',
-    [
-      'fetch', '--quiet', 'origin',
-      `+refs/heads/${base}:refs/remotes/origin/${base}`,
-      `+refs/pull/${number}/head:refs/jdiff/pr-${number}`,
-    ],
-    path,
-  )
-
-  const headRef = `refs/jdiff/pr-${number}`
-  const baseRef = `origin/${base}`
+  const headRef = prepared.headRef
+  const baseRef = target.kind === 'pr' ? `origin/${prepared.base}` : prepared.base
 
   const nameStatus = await run(
     'git',

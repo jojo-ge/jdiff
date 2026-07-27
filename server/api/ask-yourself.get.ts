@@ -1,7 +1,5 @@
 export default defineEventHandler((event) => {
-  const query = getQuery(event)
-  const repoPath = resolveRepoDir(String(query.repo ?? ''))
-  const number = String(query.number ?? '')
-  if (!/^\d+$/.test(number)) throw createError({ statusCode: 400, message: 'bad ?number=' })
-  return loadAskYourself(repoPath, number)
+  const repoPath = resolveRepoDir(String(getQuery(event).repo ?? ''))
+  const target = resolveTarget(event)
+  return loadAskYourself(repoPath, target.storeKey)
 })

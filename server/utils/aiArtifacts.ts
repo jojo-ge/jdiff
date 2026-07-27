@@ -99,7 +99,7 @@ Rate EVERY file listed above.
 - "medium": ordinary logic changes to read normally.
 - "low": mechanical, generated, formatting-only, docs, or trivially safe changes the reviewer can skim.`
 
-export function tourFormat(number: string): string {
+export function tourFormat(headRef: string): string {
   return `{
   "overview": <2-4 short paragraphs of markdown: what this change does and why, how it is structured, and any concepts the reviewer needs before reading code. Write for someone about to review it, not marketing copy.>,
   "stops": [
@@ -118,7 +118,7 @@ Guidance for stops:
 - 5 to ${MAX_TOUR_STOPS} stops, ordered as a narrative: start where the change is anchored (schema, core logic, key interface), then follow the consequences outward; put tests near the code they cover.
 - Anchor every stop on lines the PR actually changes, so it lands on visible diff lines.
 - Cover the parts that matter; skip generated files, lockfiles, and repetitive mechanical edits (mention those once in the overview instead).
-- Line numbers must be real: count them from the diff hunk headers or read the file at refs/jdiff/pr-${number}. Do not guess.`
+- Line numbers must be real: count them from the diff hunk headers or read the file at ${headRef}. Do not guess.`
 }
 
 export const QUESTIONS_FORMAT = `TOPIC: <2-4 word label for what the question is about, e.g. architecture, new pattern, API contract>

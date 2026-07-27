@@ -46,6 +46,8 @@ const filtered = computed(() => (prs.value ?? []).filter(pr =>
     <header class="bar">
       <NuxtLink to="/" class="brand">jDiff</NuxtLink>
       <span class="slug">{{ info?.slug ?? repo }}</span>
+      <span class="tab on">pull requests</span>
+      <NuxtLink :to="{ path: '/branches', query: { repo } }" class="tab">local branches</NuxtLink>
       <button class="refresh" :disabled="pending" @click="refresh()">↻</button>
       <NotificationBell :repo="repo" />
     </header>
@@ -135,6 +137,19 @@ const filtered = computed(() => (prs.value ?? []).filter(pr =>
 .slug {
   font-weight: 600;
   color: var(--muted);
+}
+.tab {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.tab:hover { color: var(--text); }
+.tab.on {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel);
 }
 .refresh {
   margin-left: auto;

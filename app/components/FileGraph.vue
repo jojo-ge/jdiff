@@ -29,6 +29,9 @@ const props = defineProps<{
   anchorFor: (path: string) => string
   risks?: Record<string, FileRisk>
   lastPushedAt?: string | null
+  // Query params identifying the review target; defaults to { number } for a
+  // PR. Branch targets pass { branch, base }.
+  targetQuery?: Record<string, string>
   // fills the viewport (used inside the fullscreen overlay) instead of
   // rendering as an inline card
   fullscreen?: boolean
@@ -42,7 +45,7 @@ const { data, pending, error, refresh } = useFetch<{
   edges: GraphEdge[]
   clusters: GraphCluster[]
 }>('/api/graph', {
-  query: { repo: props.repo, number: props.number },
+  query: { repo: props.repo, ...(props.targetQuery ?? { number: props.number }) },
 })
 
 // The graph is computed from the PR refs at fetch time; a push after that

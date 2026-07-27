@@ -28,6 +28,15 @@ interface Thread {
   key: string
   comments: ReviewComment[]
 }
+// A draft comment stored locally against a branch (no PR yet).
+interface LocalComment {
+  id: string
+  path: string
+  line: number
+  side: 'LEFT' | 'RIGHT'
+  body: string
+  createdAt: string
+}
 
 const props = defineProps<{
   file: FilePayload
@@ -38,8 +47,22 @@ const props = defineProps<{
   asks: Record<string, SavedAsk[]>
   showComments: boolean
   tourStop?: { side: 'LEFT' | 'RIGHT'; line: number; endLine: number } | null
+  // 'github' posts inline review comments to the PR; 'local' stores comments
+  // on the branch to flush onto a PR later. Default 'github'.
+  commentMode?: 'github' | 'local'
+  // Local draft comments keyed by "SIDE:line" (local mode only).
+  localComments?: Record<string, LocalComment[]>
+  // Query params identifying this target to the file/ask endpoints; defaults
+  // to { number } for a PR. Branch targets pass { branch, base }.
+  targetQuery?: Record<string, string>
+  // Human label for the copy-prompt text (e.g. "PR #123" or "branch feat-x").
+  askLabel?: string
 }>()
-const emit = defineEmits<{ posted: []; asked: []; close: [] }>()
+const emit = defineEmits<{ posted: []; asked: []; close: []; addLocal: [{ path: string; side: 'LEFT' | 'RIGHT'; line: number; body: string }]; deleteLocal: [string] }>()
+
+const isLocal = computed(() => props.commentMode === 'local')
+// Params sent to /api/file and /api/ask to identify the review target.
+const tq = computed<Record<string, string>>(() => props.targetQuery ?? { number: props.number })
 
 const collapsed = ref(false)
 
@@ -74,7 +97,7 @@ async function ensureFullLines(): Promise<boolean> {
   fullBusy.value = true
   try {
     const res = await $fetch<{ lines: string[] }>('/api/file', {
-      query: { repo: props.repo, number: props.number, path: props.file.path },
+      query: { repo: props.repo, ...tq.value, path: props.file.path },
     })
     fullLines.value = res.lines
     return true
@@ -251,8 +274,19 @@ function newMatches(row: Row): boolean {
     : row.right.type !== 'empty' && row.right.num === n.line
 }
 
+function rowLocal(row: Row): LocalComment[] {
+  const out: LocalComment[] = []
+  if (row.left.num != null && row.left.type !== 'empty') {
+    out.push(...(props.localComments?.[`LEFT:${row.left.num}`] ?? []))
+  }
+  if (row.right.num != null && row.right.type !== 'empty') {
+    out.push(...(props.localComments?.[`RIGHT:${row.right.num}`] ?? []))
+  }
+  return out
+}
+
 function hasExtras(row: Row): boolean {
-  return rowThreads(row).length > 0 || rowAsks(row).length > 0 || newMatches(row) || askStreamMatches(row)
+  return rowThreads(row).length > 0 || rowAsks(row).length > 0 || rowLocal(row).length > 0 || newMatches(row) || askStreamMatches(row)
 }
 
 function openNew(side: 'LEFT' | 'RIGHT', line: number | null) {
@@ -279,6 +313,14 @@ function cancel() {
 async function submit() {
   const text = draft.value.trim()
   if (!text || busy.value) return
+  // Local (branch) mode: hand the draft to the page, which persists it against
+  // the branch. No threads/replies — these are one-shot notes to flush later.
+  if (isLocal.value) {
+    if (!newAt.value) return
+    emit('addLocal', { path: props.file.path, side: newAt.value.side, line: newAt.value.line, body: text })
+    cancel()
+    return
+  }
   busy.value = true
   postError.value = ''
   try {
@@ -352,7 +394,7 @@ function startAsk(q: AskQuestion) {
 
   const params = new URLSearchParams({
     repo: props.repo,
-    number: props.number,
+    ...tq.value,
     path: props.file.path,
     line: String(line),
     side,
@@ -412,7 +454,7 @@ async function copyPrompt() {
     ? 'the OLD version of the file (this line is removed/changed by the PR)'
     : 'the NEW version of the file as introduced by the PR'
   await navigator.clipboard.writeText(
-    `In this repo, PR #${props.number} touches ${props.file.path}. Look at line ${n.line} of ${version} and answer: `,
+    `In this repo, ${props.askLabel ?? `PR #${props.number}`} touches ${props.file.path}. Look at line ${n.line} of ${version} and answer: `,
   )
   copied.value = true
   setTimeout(() => (copied.value = false), 1500)
@@ -426,7 +468,7 @@ async function copyAsk(a: SavedAsk) {
     ? 'the OLD version of the file (removed/changed by the PR)'
     : 'the NEW version of the file as introduced by the PR'
   await navigator.clipboard.writeText(
-    `In this repo, PR #${a.number} touches ${a.path}. This is about line ${a.line} of ${version}.\n\n` +
+    `In this repo, ${props.askLabel ?? `PR #${a.number}`} touches ${a.path}. This is about line ${a.line} of ${version}.\n\n` +
     `I asked claude "${a.question}" and it answered:\n\n${a.answer}\n\nFollow-up question: `,
   )
   copiedAskId.value = a.id
@@ -554,6 +596,17 @@ async function copyAsk(a: SavedAsk) {
                   </div>
                 </form>
                 <button v-else class="reply-btn" @click="openReply(t.rootId)">reply</button>
+              </div>
+
+              <div v-for="c in rowLocal(row)" :key="c.id" class="thread local">
+                <div class="comment">
+                  <div class="chead">
+                    <span class="cuser">draft</span>
+                    <span class="cwhen">{{ timeAgo(c.createdAt) }}</span>
+                    <button class="local-del" title="delete this draft comment" @click="emit('deleteLocal', c.id)">×</button>
+                  </div>
+                  <div class="cbody">{{ c.body }}</div>
+                </div>
               </div>
 
               <div v-for="a in rowAsks(row)" :key="a.id" class="ask-card">
@@ -839,6 +892,24 @@ async function copyAsk(a: SavedAsk) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.thread.local { border-left: 3px solid var(--accent); }
+.thread.local .cuser {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 400;
+}
+.local-del {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.local-del:hover { color: var(--red); }
 .reply-btn {
   display: block;
   width: 100%;
